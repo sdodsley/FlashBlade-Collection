@@ -56,6 +56,7 @@ plugins/modules/purefb_proxy.py import-2.7
 plugins/modules/purefb_ra.py import-2.7
 plugins/modules/purefb_realm.py import-2.7
 plugins/modules/purefb_remote_cred.py import-2.7
+plugins/modules/purefb_resource_access.py import-2.7
 plugins/modules/purefb_s3_export_policy.py compile-2.7
 plugins/modules/purefb_s3_export_policy.py import-2.7
 plugins/modules/purefb_s3acc.py import-2.7
