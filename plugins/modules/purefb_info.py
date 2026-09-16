@@ -36,6 +36,15 @@ options:
         capacity, network, subnets, lags, filesystems, snapshots, buckets,
         replication, policies, arrays, accounts, admins, ad, kerberos,
         drives, servers and fleet.
+      - The C(filesystems) subset surfaces the legacy file system keys
+        C(nfs_rules), C(export_policy), C(smb_client_policy) and
+        C(smb_share_policy). Purity//FB marks the underlying fields as
+        deprecated in favour of File System Exports, so these keys may
+        return C(null) in future releases. Read export policy
+        assignments from the per-filesystem C(file_system_exports)
+        list (and the top-level C(file_system_exports) view under
+        C(subset=filesystems)/C(subset=all)) instead. These keys will
+        be removed from this module in 2.0.0.
     required: false
     type: list
     elements: str
@@ -112,6 +121,7 @@ NAP_API_VERSION = "2.13"
 RA_DURATION_API_VERSION = "2.14"
 SMTP_ENCRYPT_API_VERSION = "2.15"
 SERVERS_API_VERSION = "2.16"
+PASSWORD_POLICY_API_VERSION = "2.16"
 FLEET_API_VERSION = "2.17"
 
 
@@ -149,7 +159,7 @@ def generate_default_dict(blade):
     default_info["blades"] = blade.get_blades().total_item_count
     default_info["certificates"] = blade.get_certificates().total_item_count
     default_info["total_capacity"] = list(blade.get_arrays_space().items)[0].capacity
-    default_info["api_versions"] = api_version
+    default_info["api_version"] = api_version
     default_info["policies"] = blade.get_policies_all().total_item_count
     # Count policies by type
     all_policies = list(blade.get_policies_all().items)
@@ -1130,6 +1140,37 @@ def generate_smb_client_policies_dict(blade):
     return policies_info
 
 
+def generate_password_policies_dict(blade):
+    policies_info = {}
+    policies = list(blade.get_password_policies().items)
+    for policy in policies:
+        # Rules disabled on the array (set to 0) read back as absent and
+        # are reported as null. Durations are reported in seconds, matching
+        # the purefb_password_policy module and the admin settings values
+        # in the default subset; the API stores milliseconds.
+        lockout = getattr(policy, "lockout_duration", None)
+        min_age = getattr(policy, "min_password_age", None)
+        max_age = getattr(policy, "max_password_age", None)
+        policies_info[policy.name] = {
+            "enabled": getattr(policy, "enabled", None),
+            "min_password_length": getattr(policy, "min_password_length", None),
+            "max_login_attempts": getattr(policy, "max_login_attempts", None),
+            "lockout_duration": (int(lockout / 1000) if lockout is not None else None),
+            "password_history": getattr(policy, "password_history", None),
+            "min_password_age": (int(min_age / 1000) if min_age is not None else None),
+            "max_password_age": (int(max_age / 1000) if max_age is not None else None),
+            "min_character_groups": getattr(policy, "min_character_groups", None),
+            "min_characters_per_group": getattr(
+                policy, "min_characters_per_group", None
+            ),
+            "enforce_username_check": getattr(policy, "enforce_username_check", None),
+            "enforce_dictionary_check": getattr(
+                policy, "enforce_dictionary_check", None
+            ),
+        }
+    return policies_info
+
+
 def generate_object_store_accounts_dict(blade):
     account_info = {}
 
@@ -1217,8 +1258,11 @@ def generate_object_store_accounts_dict(blade):
     return account_info
 
 
-def generate_fs_dict(blade):
+def generate_fs_dict(blade, exports=None):
     fs_info = {}
+    by_fs = {}
+    for e in exports or []:
+        by_fs.setdefault(e.get("filesystem"), []).append(e)
     for fsystem in blade.get_file_systems().items:
         share = fsystem.name
 
@@ -1270,6 +1314,8 @@ def generate_fs_dict(blade):
             ),
             "multi_protocol_safeguard_acls": getattr(multi, "safeguard_acls", None),
         }
+        if exports is not None:
+            fs_info[share]["file_system_exports"] = by_fs.get(share, [])
 
         # Group quotas
         for group_quota in blade.get_quotas_groups(file_system_names=[share]).items:
@@ -1334,6 +1380,39 @@ def generate_servers_dict(blade):
     return servers_info
 
 
+def generate_file_system_exports_dict(blade):
+    """Return the list of File System Exports for the whole array.
+
+    Requires REST API 2.16+ (SERVERS_API_VERSION). Callers must gate on
+    the API version before invoking; this helper does not check.
+    """
+    exports = []
+    for exp in blade.get_file_system_exports().items:
+        member = getattr(exp, "member", None)
+        server = getattr(exp, "server", None)
+        policy = getattr(exp, "policy", None)
+        share_policy = getattr(exp, "share_policy", None)
+        ptype = getattr(exp, "policy_type", None)
+        exports.append(
+            {
+                "export_name": getattr(exp, "export_name", None),
+                "type": ptype,
+                "filesystem": getattr(member, "name", None),
+                "server": getattr(server, "name", None),
+                "export_policy": (
+                    getattr(policy, "name", None) if ptype == "NFS" else None
+                ),
+                "client_policy": (
+                    getattr(policy, "name", None) if ptype == "SMB" else None
+                ),
+                "share_policy": (
+                    getattr(share_policy, "name", None) if ptype == "SMB" else None
+                ),
+            }
+        )
+    return exports
+
+
 def generate_fleet_dict(blade):
     fleet_items = list(blade.get_fleets().items)
     if not fleet_items:
@@ -1365,7 +1444,7 @@ def main():
     module = AnsibleModule(argument_spec, supports_check_mode=True)
 
     blade = get_system(module)
-    api_versions = get_rest_api_version(blade)
+    api_version = get_rest_api_version(blade)
 
     if not module.params["gather_subset"]:
         module.params["gather_subset"] = ["minimum"]
@@ -1417,7 +1496,11 @@ def main():
     if "subnets" in subset or "all" in subset:
         info["subnet"] = generate_subnet_dict(blade)
     if "filesystems" in subset or "all" in subset:
-        info["filesystems"] = generate_fs_dict(blade)
+        exports_list = None
+        if LooseVersion(SERVERS_API_VERSION) <= LooseVersion(api_version):
+            exports_list = generate_file_system_exports_dict(blade)
+            info["file_system_exports"] = exports_list
+        info["filesystems"] = generate_fs_dict(blade, exports_list)
     if "admins" in subset or "all" in subset:
         info["admins"] = generate_admin_dict(blade)
     if "snapshots" in subset or "all" in subset:
@@ -1443,26 +1526,28 @@ def main():
         info["kerberos"] = generate_kerb_dict(blade)
     if "policies" in subset or "all" in subset:
         info["access_policies"] = generate_object_store_access_policies_dict(blade)
-        if LooseVersion(PUBLIC_API_VERSION) <= LooseVersion(api_versions):
+        if LooseVersion(PUBLIC_API_VERSION) <= LooseVersion(api_version):
             info["bucket_access_policies"] = generate_bucket_access_policies_dict(blade)
             info["bucket_cross_origin_policies"] = (
                 generate_bucket_cross_object_policies_dict(blade)
             )
         info["export_policies"] = generate_nfs_export_policies_dict(blade)
-        if LooseVersion(SMB_CLIENT_API_VERSION) <= LooseVersion(api_versions):
+        if LooseVersion(SMB_CLIENT_API_VERSION) <= LooseVersion(api_version):
             info["share_policies"] = generate_smb_client_policies_dict(blade)
-        if LooseVersion(FLEET_API_VERSION) <= LooseVersion(api_versions):
+        if LooseVersion(PASSWORD_POLICY_API_VERSION) <= LooseVersion(api_version):
+            info["password_policies"] = generate_password_policies_dict(blade)
+        if LooseVersion(FLEET_API_VERSION) <= LooseVersion(api_version):
             info["fleet"] = generate_fleet_dict(blade)
     if (
         "drives" in subset
         or "all" in subset
-        and LooseVersion(DRIVES_API_VERSION) <= LooseVersion(api_versions)
+        and LooseVersion(DRIVES_API_VERSION) <= LooseVersion(api_version)
     ):
         info["drives"] = generate_drives_dict(blade)
     if (
         "servers" in subset
         or "all" in subset
-        and LooseVersion(SERVERS_API_VERSION) <= LooseVersion(api_versions)
+        and LooseVersion(SERVERS_API_VERSION) <= LooseVersion(api_version)
     ):
         info["servers"] = generate_servers_dict(blade)
     module.exit_json(changed=False, purefb_info=info)

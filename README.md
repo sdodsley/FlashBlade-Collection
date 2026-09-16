@@ -15,7 +15,7 @@ The Everpure FlashBlade collection consists of the latest versions of the FlashB
 
 - Ansible 2.16 or later
 - Everpure FlashBlade system running Purity//FB 3.3.3 or later
-- py-pure-client >=v1.67.2
+- py-pure-client >=1.88.0
 - python >=3.9
 - netaddr
 - pytz
@@ -128,6 +128,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefb_mgmt_role - manage FlashBlade custom management roles, permissions, and policy attachment
 - purefb_network - manage the network settings for a FlashBlade
 - purefb_ntp - manage the NTP settings for a FlashBlade
+- purefb_password_policy - manage the FlashBlade management password policy
 - purefb_phonehome - manage the phone home settings for a FlashBlade
 - purefb_pingtrace - perform FlashBlade network diagnostics
 - purefb_policy - manage the filesystem snapshot policies for a FlashBlade
@@ -135,6 +136,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefb_ra - manage the Remote Assist connections on a FlashBlade
 - purefb_realm - manage the Realms for a FlashBlade
 - purefb_remote_cred - manage the Object Store Remote Credentials on a FlashBlade
+- purefb_resource_access - manage resource access for a FlashBlade
 - purefb_s3_export_policy - manage FlashBlade S3 export policies and their rules
 - purefb_s3acc - manage the object store accounts on a FlashBlade
 - purefb_s3acc_export - manage FlashBlade object store account exports

@@ -59,6 +59,14 @@ options:
     choices: [ "vip" ]
     default: vip
     type: str
+  attached_server:
+    description:
+        - Name of the server you want to attach to the interface
+        - To attach to a server on a Realm, set the value to realm-1::server-1
+        - Only 1 server per Network Interface.
+    required: false
+    type: str
+
 extends_documentation_fragment:
     - everpure.flashblade.everpure.fb
 """
@@ -68,6 +76,15 @@ EXAMPLES = """
   everpure.flashblade.purefb_network:
     name: foo
     address: 10.21.200.23
+    state: present
+    fb_url: 10.10.10.2
+    api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
+
+- name: Create a new network interface named foo with attached server named server-1 in a Realm named realm-1
+  everpure.flashblade.purefb_network:
+    name: foo
+    address: 10.21.200.23
+    attached_server: realm-1::server-1
     state: present
     fb_url: 10.10.10.2
     api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
@@ -104,7 +121,13 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import 
 )
 from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
     get_error_message,
+    get_rest_api_version,
 )
+from ansible_collections.everpure.flashblade.plugins.module_utils.version import (
+    LooseVersion,
+)
+
+SERVERS_API_VERSION = "2.16"
 
 
 def get_iface(module, blade):
@@ -115,17 +138,34 @@ def get_iface(module, blade):
     return None
 
 
+def _attached_server_name(iface):
+    """Name of the server an interface is attached to, or None.
+
+    ``attached_servers`` is a list of references on the API, even though an
+    interface can only carry one server.
+    """
+    attached = getattr(iface, "attached_servers", None) or []
+    if not attached:
+        return None
+    return getattr(attached[0], "name", None)
+
+
 def create_iface(module, blade):
     """Create Network Interface"""
     changed = True
     if not module.check_mode:
+        network_interface = NetworkInterface(
+            address=module.params["address"],
+            services=[module.params["services"]],
+            type=module.params["itype"],
+        )
+        if module.params["attached_server"]:
+            network_interface.attached_servers = [
+                {"name": module.params["attached_server"]}
+            ]
         res = blade.post_network_interfaces(
             names=[module.params["name"]],
-            network_interface=NetworkInterface(
-                address=module.params["address"],
-                services=[module.params["services"]],
-                type=module.params["itype"],
-            ),
+            network_interface=network_interface,
         )
         if res.status_code != 200:
             module.fail_json(
@@ -147,6 +187,25 @@ def modify_iface(module, blade):
                 names=[module.params["name"]],
                 network_interface=NetworkInterfacePatch(
                     address=module.params["address"]
+                ),
+            )
+            if res.status_code != 200:
+                module.fail_json(
+                    msg="Failed to modify Interface {0}. Error: {1}".format(
+                        module.params["name"], get_error_message(res)
+                    )
+                )
+    # Only move the interface when it is not already on the requested server.
+    # An interface carries at most one attached server, but the API field is
+    # a list, so the current name has to be pulled out of it.
+    wanted_server = module.params["attached_server"]
+    if wanted_server is not None and wanted_server != _attached_server_name(iface):
+        changed = True
+        if not module.check_mode:
+            res = blade.patch_network_interfaces(
+                names=[module.params["name"]],
+                network_interface=NetworkInterfacePatch(
+                    attached_servers=[{"name": module.params["attached_server"]}]
                 ),
             )
             if res.status_code != 200:
@@ -181,6 +240,7 @@ def main():
             address=dict(type="str"),
             services=dict(type="str", default="data", choices=["data", "replication"]),
             itype=dict(type="str", default="vip", choices=["vip"]),
+            attached_server=dict(type="str", required=False),
         )
     )
 
@@ -192,10 +252,18 @@ def main():
 
     if not HAS_PYPURECLIENT:
         module.fail_json(msg="py-pure-client sdk is required for this module")
-
     state = module.params["state"]
     blade = get_system(module)
     iface = get_iface(module, blade)
+
+    api_version = get_rest_api_version(blade)
+    if module.params["attached_server"] and LooseVersion(
+        SERVERS_API_VERSION
+    ) > LooseVersion(api_version):
+        module.fail_json(
+            msg="FlashBlade REST version {0} does not support attached_server "
+            "(requires {1}+).".format(api_version, SERVERS_API_VERSION)
+        )
 
     if state == "present" and not iface:
         create_iface(module, blade)
