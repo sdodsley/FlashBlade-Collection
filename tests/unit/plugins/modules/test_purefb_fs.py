@@ -4660,6 +4660,11 @@ class TestPurefbFs:
     @patch("plugins.modules.purefb_fs.MultiProtocolPost")
     @patch("plugins.modules.purefb_fs.human_to_bytes")
     @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.17"),
+    )
     def test_deprecation_fires_for_each_legacy_policy_field(
         self,
         mock_human_to_bytes,
@@ -4711,6 +4716,11 @@ class TestPurefbFs:
     @patch("plugins.modules.purefb_fs.MultiProtocolPost")
     @patch("plugins.modules.purefb_fs.human_to_bytes")
     @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.17"),
+    )
     def test_no_deprecation_when_legacy_policy_fields_omitted(
         self,
         mock_human_to_bytes,

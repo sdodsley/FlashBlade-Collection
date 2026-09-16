@@ -159,7 +159,7 @@ def generate_default_dict(blade):
     default_info["blades"] = blade.get_blades().total_item_count
     default_info["certificates"] = blade.get_certificates().total_item_count
     default_info["total_capacity"] = list(blade.get_arrays_space().items)[0].capacity
-    default_info["api_version"] = api_version
+    default_info["api_versions"] = api_version
     default_info["policies"] = blade.get_policies_all().total_item_count
     # Count policies by type
     all_policies = list(blade.get_policies_all().items)

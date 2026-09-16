@@ -32,3 +32,6 @@ minor_changes:
   - purefb_virtualhost - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
 bugfixes:
   - purefb_info - Fix default subset version gating so encryption, network access protocol and remote assist duration details are reported when the array supports them
+  - purefb_info - The ``default`` subset's ``api_versions`` value now reports the
+    highest REST API version the array supports, rather than the lowest. It
+    previously read the first entry of the supported-versions list.
