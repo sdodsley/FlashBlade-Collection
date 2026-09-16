@@ -15,7 +15,7 @@ The Everpure FlashBlade collection consists of the latest versions of the FlashB
 
 - Ansible 2.16 or later
 - Everpure FlashBlade system running Purity//FB 3.3.3 or later
-- py-pure-client >=v1.67.2
+- py-pure-client >=1.88.0
 - python >=3.9
 - netaddr
 - pytz
