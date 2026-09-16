@@ -782,14 +782,18 @@ def generate_array_conn_dict(blade):
     array_conn_info = {}
     arrays = list(blade.get_array_connections().items)
     for array in arrays:
-        array = array.remote.name
-        array_conn_info[array] = {
+        # Keep the connection object intact: rebinding `array` to the remote
+        # name here made every attribute read below fail with AttributeError.
+        remote_name = array.remote.name
+        array_conn_info[remote_name] = {
             "encrypted": array.encrypted,
             "replication_addresses": array.replication_addresses,
             "management_address": array.management_address,
             "status": array.status,
             "version": array.version,
-            "ca_certificate_group": array.ca_certificate_group.name,
+            "ca_certificate_group": getattr(
+                getattr(array, "ca_certificate_group", None), "name", None
+            ),
             "throttle": {
                 "default_limit": _bytes_to_human(
                     getattr(array.throttle, "default_limit", None)
@@ -1011,7 +1015,9 @@ def generate_bucket_access_policies_dict(blade):
         if res.status_code == 200 and res.total_item_count != 0:
             for policy in res.items:
                 policies_info[policy.name] = {
-                    "description": policy.description,
+                    # BucketAccessPolicy has no description field, unlike the
+                    # object store access policy reported further down.
+                    "description": getattr(policy, "description", None),
                     "enabled": policy.enabled,
                     "local": policy.is_local,
                     "rules": [],
