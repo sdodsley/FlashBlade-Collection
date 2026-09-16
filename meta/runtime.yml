@@ -47,6 +47,7 @@ action_groups:
    - purefb_ra
    - purefb_realm
    - purefb_remote_cred
+   - purefb_resource_access
    - purefb_s3_export_policy
    - purefb_s3acc
    - purefb_s3acc_export
