@@ -138,6 +138,18 @@ def get_iface(module, blade):
     return None
 
 
+def _attached_server_name(iface):
+    """Name of the server an interface is attached to, or None.
+
+    ``attached_servers`` is a list of references on the API, even though an
+    interface can only carry one server.
+    """
+    attached = getattr(iface, "attached_servers", None) or []
+    if not attached:
+        return None
+    return getattr(attached[0], "name", None)
+
+
 def create_iface(module, blade):
     """Create Network Interface"""
     changed = True
@@ -183,8 +195,11 @@ def modify_iface(module, blade):
                         module.params["name"], get_error_message(res)
                     )
                 )
-    if module.params["attached_server"] is not None:
-        """If the attached server is different, it will be moved to the new server"""
+    # Only move the interface when it is not already on the requested server.
+    # An interface carries at most one attached server, but the API field is
+    # a list, so the current name has to be pulled out of it.
+    wanted_server = module.params["attached_server"]
+    if wanted_server is not None and wanted_server != _attached_server_name(iface):
         changed = True
         if not module.check_mode:
             res = blade.patch_network_interfaces(

@@ -1,2 +1,5 @@
 bugfixes:
-  - purefb_network - Added attached_server parameter. The attached_server parameter is only valid when creating a new interface, and should not be sent when updating an existing interface.
+  - purefb_network - Added ``attached_server`` parameter so a network interface can
+    be attached to a specific server rather than always landing on the default
+    server, and so an existing interface can be moved to another server. Requires
+    REST API 2.16 or higher.
