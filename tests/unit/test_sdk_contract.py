@@ -79,10 +79,6 @@ CHECKED_METHODS = (
 #       BucketAccessPolicyPost has only 'rules'. The POST body is empty, but
 #       the policy is addressed by bucket_names and its rule is created
 #       separately, so the feature still works and 'name' is merely dead.
-#   purefb_kmip / KmipServer / certificate
-#       KmipServer has no 'certificate'. The user's certificate is validated
-#       and then silently discarded on both create and update. A real bug,
-#       tracked separately.
 #   purefb_policy / SmbClientPolicyRule / access
 #       SmbClientPolicyRule has no 'access'; the real field is 'permission',
 #       which these calls already pass. 'access' is NFS export-policy
@@ -90,7 +86,6 @@ CHECKED_METHODS = (
 KNOWN_SDK_KWARG_MISMATCHES = frozenset(
     [
         ("purefb_bucket.py", "BucketAccessPolicyPost", "name"),
-        ("purefb_kmip.py", "KmipServer", "certificate"),
         ("purefb_policy.py", "SmbClientPolicyRule", "access"),
     ]
 )
