@@ -79,6 +79,8 @@ from plugins.modules.purefb_info import (
     generate_password_policies_dict,
     generate_file_system_exports_dict,
     generate_fs_dict,
+    generate_array_conn_dict,
+    generate_bucket_access_policies_dict,
 )
 
 
@@ -933,3 +935,106 @@ class TestPurefbInfo:
 
         assert len(result["fs1"]["file_system_exports"]) == 1
         assert result["fs1"]["file_system_exports"][0]["export_name"] == "fs1_nfs"
+
+    def test_generate_array_conn_dict_keys_by_remote_and_reads_the_connection(self):
+        """The dict is keyed by the remote name, values come from the connection.
+
+        Rebinding the loop variable to array.remote.name made every attribute
+        read below raise AttributeError, so the arrays subset - and therefore
+        gather_subset=all - failed on any array with a replication connection.
+        The spec'd mock reproduces that: a str has no .encrypted.
+        """
+        window = Mock(spec=["start", "end"])
+        window.start = None
+        window.end = None
+        throttle = Mock(spec=["default_limit", "window_limit", "window"])
+        throttle.default_limit = None
+        throttle.window_limit = None
+        throttle.window = window
+        remote = Mock(spec=["name"])
+        remote.name = "remote-array"
+        conn = Mock(
+            spec=[
+                "remote",
+                "encrypted",
+                "replication_addresses",
+                "management_address",
+                "status",
+                "version",
+                "ca_certificate_group",
+                "throttle",
+            ]
+        )
+        conn.remote = remote
+        conn.encrypted = False
+        conn.replication_addresses = ["10.0.0.1"]
+        conn.management_address = "10.0.0.2"
+        conn.status = "connected"
+        conn.version = "4.3.3"
+        # The array returns a FixedReference whose name may be None, rather
+        # than None itself. Both shapes must be tolerated.
+        ca_group = Mock(spec=["name"])
+        ca_group.name = None
+        conn.ca_certificate_group = ca_group
+        conn.throttle = throttle
+
+        mock_blade = Mock()
+        mock_blade.get_array_connections.return_value.items = [conn]
+
+        result = generate_array_conn_dict(mock_blade)
+
+        assert list(result) == ["remote-array"]
+        entry = result["remote-array"]
+        assert entry["encrypted"] is False
+        assert entry["status"] == "connected"
+        assert entry["version"] == "4.3.3"
+        assert entry["management_address"] == "10.0.0.2"
+        assert entry["replication_addresses"] == ["10.0.0.1"]
+        assert entry["ca_certificate_group"] is None
+
+        # and when the field itself is absent
+        conn.ca_certificate_group = None
+        result = generate_array_conn_dict(mock_blade)
+        assert result["remote-array"]["ca_certificate_group"] is None
+
+    def test_generate_bucket_access_policies_dict_tolerates_no_description(self):
+        """BucketAccessPolicy has no description field.
+
+        Reading it directly raised AttributeError, which broke the policies
+        subset. The spec'd mock has no description, matching the real model.
+        """
+        principal = Mock(spec=["all"])
+        principal.all = True
+        rule = Mock(spec=["name", "actions", "principals", "resources", "effect"])
+        rule.name = "rule1"
+        rule.actions = ["s3:GetObject"]
+        rule.principals = principal
+        rule.resources = ["bucket/*"]
+        rule.effect = "allow"
+
+        policy = Mock(spec=["name", "enabled", "is_local", "rules"])
+        policy.name = "bucket/access-policy"
+        policy.enabled = True
+        policy.is_local = True
+        policy.rules = [rule]
+
+        bucket = Mock(spec=["name"])
+        bucket.name = "bucket"
+
+        response = Mock()
+        response.status_code = 200
+        response.total_item_count = 1
+        response.items = [policy]
+
+        mock_blade = Mock()
+        mock_blade.get_buckets.return_value.items = [bucket]
+        mock_blade.get_buckets_bucket_access_policies.return_value = response
+
+        result = generate_bucket_access_policies_dict(mock_blade)
+
+        assert "bucket/access-policy" in result
+        entry = result["bucket/access-policy"]
+        assert entry["description"] is None
+        assert entry["enabled"] is True
+        assert entry["local"] is True
+        assert len(entry["rules"]) == 1
