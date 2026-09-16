@@ -121,6 +121,7 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import 
 )
 from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
     get_error_message,
+    get_rest_api_version,
 )
 from ansible_collections.everpure.flashblade.plugins.module_utils.version import (
     LooseVersion,
@@ -147,9 +148,9 @@ def create_iface(module, blade):
             type=module.params["itype"],
         )
         if module.params["attached_server"]:
-            network_interface.attached_server = {
-                "name": module.params["attached_server"]
-            }
+            network_interface.attached_servers = [
+                {"name": module.params["attached_server"]}
+            ]
         res = blade.post_network_interfaces(
             names=[module.params["name"]],
             network_interface=network_interface,
@@ -182,22 +183,22 @@ def modify_iface(module, blade):
                         module.params["name"], get_error_message(res)
                     )
                 )
-        elif module.params["attached_server"] != iface.attached_server:
-            """If the attached server is different, it will be moved to the new server"""
-            changed = True
-            if not module.check_mode:
-                res = blade.patch_network_interfaces(
-                    names=[module.params["name"]],
-                    network_interface=NetworkInterfacePatch(
-                        attached_server=module.params["attached_server"]
-                    ),
-                )
-                if res.status_code != 200:
-                    module.fail_json(
-                        msg="Failed to modify Interface {0}. Error: {1}".format(
-                            module.params["name"], get_error_message(res)
-                        )
+    if module.params["attached_server"] is not None:
+        """If the attached server is different, it will be moved to the new server"""
+        changed = True
+        if not module.check_mode:
+            res = blade.patch_network_interfaces(
+                names=[module.params["name"]],
+                network_interface=NetworkInterfacePatch(
+                    attached_servers=[{"name": module.params["attached_server"]}]
+                ),
+            )
+            if res.status_code != 200:
+                module.fail_json(
+                    msg="Failed to modify Interface {0}. Error: {1}".format(
+                        module.params["name"], get_error_message(res)
                     )
+                )
     module.exit_json(changed=changed)
 
 
@@ -240,12 +241,13 @@ def main():
     blade = get_system(module)
     iface = get_iface(module, blade)
 
-    api_version = list(blade.get_versions().items)
-    if LooseVersion(SERVERS_API_VERSION) > LooseVersion(api_version):
+    api_version = get_rest_api_version(blade)
+    if module.params["attached_server"] and LooseVersion(
+        SERVERS_API_VERSION
+    ) > LooseVersion(api_version):
         module.fail_json(
-            msg="Module requires API version {0} or greater. Current version: {1}".format(
-                SERVERS_API_VERSION, api_version
-            )
+            msg="FlashBlade REST version {0} does not support attached_server "
+            "(requires {1}+).".format(api_version, SERVERS_API_VERSION)
         )
 
     if state == "present" and not iface:
