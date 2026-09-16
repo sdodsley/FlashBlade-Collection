@@ -270,7 +270,7 @@ def get_export(module, blade):
 def _warn_type_transition(module, blade):
     """Warn when a same-address export of the OTHER protocol exists.
 
-    Admin guide p60 permits one export per protocol per filesystem, so
+    One export per protocol per filesystem is permitted, so
     both can legitimately coexist, but this almost always indicates a
     mistyped ``type:`` parameter.
     """
@@ -291,8 +291,8 @@ def _warn_type_transition(module, blade):
         module.warn(
             "A {0} export named {1} already exists on filesystem {2} "
             "server {3}. Creating a {4} export in addition rather than "
-            "modifying the existing one - admin guide p60 permits one "
-            "FileSystemExport per protocol per filesystem. If this was "
+            "modifying the existing one. One FileSystemExport per protocol "
+            "per filesystem is permitted. If this was "
             "not intentional, check the `type:` parameter.".format(
                 other_type,
                 module.params["name"],

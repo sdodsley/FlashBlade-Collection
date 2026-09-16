@@ -494,7 +494,8 @@ def create_fs(module, blade):
         }
         if module.params["nfs_rules"] is not None:
             module.deprecate(
-                "nfs_rules is deprecated. Use export_policy instead.",
+                "nfs_rules is deprecated. Use the purefb_export module to attach ",
+                "NFS export policies via the File System Exports endpoints.",
                 version="2.0.0",
                 collection_name="everpure.flashblade",
             )
@@ -1108,7 +1109,8 @@ def modify_fs(module, blade):
         )
     if module.params["nfs_rules"] is not None:
         module.deprecate(
-            "nfs_rules is deprecated. Use export_policy instead.",
+            "nfs_rules is deprecated. Use the purefb_export module to attach ",
+            "NFS export policies via the File System Exports endpoints.",
             version="2.0.0",
             collection_name="everpure.flashblade",
         )

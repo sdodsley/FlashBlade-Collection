@@ -1249,6 +1249,9 @@ def generate_object_store_accounts_dict(blade):
 
 def generate_fs_dict(blade, exports=None):
     fs_info = {}
+    by_fs = {}
+    for e in exports or []:
+        by_fs.setdefault(e.get("filesystem"), []).append(e)
     for fsystem in blade.get_file_systems().items:
         share = fsystem.name
 
@@ -1301,9 +1304,7 @@ def generate_fs_dict(blade, exports=None):
             "multi_protocol_safeguard_acls": getattr(multi, "safeguard_acls", None),
         }
         if exports is not None:
-            fs_info[share]["file_system_exports"] = [
-                e for e in exports if e.get("filesystem") == share
-            ]
+            fs_info[share]["file_system_exports"] = by_fs.get(share, [])
 
         # Group quotas
         for group_quota in blade.get_quotas_groups(file_system_names=[share]).items:
@@ -1484,17 +1485,6 @@ def main():
     if "subnets" in subset or "all" in subset:
         info["subnet"] = generate_subnet_dict(blade)
     if "filesystems" in subset or "all" in subset:
-        module.deprecate(
-            "The filesystems subset keys nfs_rules, export_policy, "
-            "smb_client_policy and smb_share_policy are deprecated. "
-            "Purity//FB marks the underlying nfs.* and smb.* fields as "
-            "deprecated in favour of File System Exports; these keys "
-            "may return null in future releases. Read export policy "
-            "assignments from the per-filesystem file_system_exports "
-            "list (and the top-level file_system_exports view) instead.",
-            version="3.0.0",
-            collection_name="everpure.flashblade",
-        )
         exports_list = None
         if SERVERS_API_VERSION in api_versions:
             exports_list = generate_file_system_exports_dict(blade)

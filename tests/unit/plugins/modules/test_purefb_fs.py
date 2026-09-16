@@ -419,7 +419,8 @@ class TestPurefbFs:
         )
         # And the deprecation notice must be emitted
         mock_module.deprecate.assert_any_call(
-            "nfs_rules is deprecated. Use export_policy instead.",
+            "nfs_rules is deprecated. Use the purefb_export module to attach ",
+            "NFS export policies via the File System Exports endpoints.",
             version="2.0.0",
             collection_name="everpure.flashblade",
         )
