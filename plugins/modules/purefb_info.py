@@ -44,7 +44,7 @@ options:
         assignments from the per-filesystem C(file_system_exports)
         list (and the top-level C(file_system_exports) view under
         C(subset=filesystems)/C(subset=all)) instead. These keys will
-        be removed from this module in 3.0.0.
+        be removed from this module in 2.0.0.
     required: false
     type: list
     elements: str

@@ -65,8 +65,9 @@ options:
     description:
       - Define the NFS client export rules for the filesystem, for example
         C(10.21.200.0/24(rw,no_root_squash)).
-      - Deprecated. Use I(export_policy) instead. This parameter will be
-        removed in 2.0.0.
+      - Deprecated. Use the M(everpure.flashblade.purefb_export) module to
+        attach NFS export policies via the File System Exports endpoints.
+        This parameter will be removed in 2.0.0.
       - Only honoured when explicitly set, and only for non-realm
         filesystems. It is ignored for filesystems in a realm.
     required: false
@@ -178,7 +179,7 @@ options:
       M(everpure.flashblade.purefb_export) module's C(export_policy)
       option to attach NFS export policies via the dedicated File
       System Exports endpoints.
-      This parameter will be removed in 3.0.0.
+      This parameter will be removed in 2.0.0.
     type: str
     version_added: "1.9.0"
   share_policy:
@@ -191,7 +192,7 @@ options:
       M(everpure.flashblade.purefb_export) module's C(share_policy)
       option to attach SMB share policies via the dedicated File
       System Exports endpoints.
-      This parameter will be removed in 3.0.0.
+      This parameter will be removed in 2.0.0.
     type: str
     version_added: "1.12.0"
   client_policy:
@@ -204,7 +205,7 @@ options:
       M(everpure.flashblade.purefb_export) module's C(client_policy)
       option to attach SMB client policies via the dedicated File
       System Exports endpoints.
-      This parameter will be removed in 3.0.0.
+      This parameter will be removed in 2.0.0.
     type: str
     version_added: "1.12.0"
   continuous_availability:
@@ -494,7 +495,7 @@ def create_fs(module, blade):
         }
         if module.params["nfs_rules"] is not None:
             module.deprecate(
-                "nfs_rules is deprecated. Use the purefb_export module to attach ",
+                "nfs_rules is deprecated. Use the purefb_export module to attach "
                 "NFS export policies via the File System Exports endpoints.",
                 version="2.0.0",
                 collection_name="everpure.flashblade",
@@ -512,7 +513,7 @@ def create_fs(module, blade):
                 "module's export_policy option to attach NFS export "
                 "policies via the dedicated File System Exports "
                 "endpoints.",
-                version="3.0.0",
+                version="2.0.0",
                 collection_name="everpure.flashblade",
             )
         if module.params["share_policy"] is not None:
@@ -521,7 +522,7 @@ def create_fs(module, blade):
                 "module's share_policy option to attach SMB share "
                 "policies via the dedicated File System Exports "
                 "endpoints.",
-                version="3.0.0",
+                version="2.0.0",
                 collection_name="everpure.flashblade",
             )
         if module.params["client_policy"] is not None:
@@ -530,7 +531,7 @@ def create_fs(module, blade):
                 "module's client_policy option to attach SMB client "
                 "policies via the dedicated File System Exports "
                 "endpoints.",
-                version="3.0.0",
+                version="2.0.0",
                 collection_name="everpure.flashblade",
             )
 
@@ -1086,7 +1087,7 @@ def modify_fs(module, blade):
             "module's export_policy option to attach NFS export "
             "policies via the dedicated File System Exports "
             "endpoints.",
-            version="3.0.0",
+            version="2.0.0",
             collection_name="everpure.flashblade",
         )
     if module.params["share_policy"] is not None:
@@ -1095,7 +1096,7 @@ def modify_fs(module, blade):
             "module's share_policy option to attach SMB share "
             "policies via the dedicated File System Exports "
             "endpoints.",
-            version="3.0.0",
+            version="2.0.0",
             collection_name="everpure.flashblade",
         )
     if module.params["client_policy"] is not None:
@@ -1104,12 +1105,12 @@ def modify_fs(module, blade):
             "module's client_policy option to attach SMB client "
             "policies via the dedicated File System Exports "
             "endpoints.",
-            version="3.0.0",
+            version="2.0.0",
             collection_name="everpure.flashblade",
         )
     if module.params["nfs_rules"] is not None:
         module.deprecate(
-            "nfs_rules is deprecated. Use the purefb_export module to attach ",
+            "nfs_rules is deprecated. Use the purefb_export module to attach "
             "NFS export policies via the File System Exports endpoints.",
             version="2.0.0",
             collection_name="everpure.flashblade",

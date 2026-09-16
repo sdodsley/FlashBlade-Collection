@@ -4,7 +4,7 @@ minor_changes:
  - purefb_export - Add examples documenting the migration path from ``purefb_fs``'s ``export_policy``, ``share_policy`` and ``client_policy`` parameters
  - purefb_info - Add per-filesystem ``file_system_exports`` list under ``filesystems`` and a top-level ``file_system_exports`` view; use instead of the legacy filesystem-level policy keys
 deprecated_features:
- - purefb_fs - Deprecate ``export_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``nfs.export_policy`` as deprecated. Removed in 3.0.0
- - purefb_fs - Deprecate ``share_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.share_policy`` as deprecated. Removed in 3.0.0
- - purefb_fs - Deprecate ``client_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.client_policy`` as deprecated. Removed in 3.0.0
- - purefb_info - Deprecate ``filesystems`` subset keys ``nfs_rules``, ``export_policy``, ``smb_client_policy`` and ``smb_share_policy``; use ``file_system_exports`` instead. Removed in 3.0.0
+ - purefb_fs - Deprecate ``export_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``nfs.export_policy`` as deprecated. Removed in 2.0.0
+ - purefb_fs - Deprecate ``share_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.share_policy`` as deprecated. Removed in 2.0.0
+ - purefb_fs - Deprecate ``client_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.client_policy`` as deprecated. Removed in 2.0.0
+ - purefb_info - Deprecate ``filesystems`` subset keys ``nfs_rules``, ``export_policy``, ``smb_client_policy`` and ``smb_share_policy``; use ``file_system_exports`` instead. Removed in 2.0.0

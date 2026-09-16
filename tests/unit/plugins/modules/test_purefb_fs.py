@@ -419,7 +419,7 @@ class TestPurefbFs:
         )
         # And the deprecation notice must be emitted
         mock_module.deprecate.assert_any_call(
-            "nfs_rules is deprecated. Use the purefb_export module to attach ",
+            "nfs_rules is deprecated. Use the purefb_export module to attach "
             "NFS export policies via the File System Exports endpoints.",
             version="2.0.0",
             collection_name="everpure.flashblade",
@@ -4347,7 +4347,7 @@ class TestPurefbFs:
         assert any("export_policy is deprecated" in msg for msg in emitted)
         assert any("share_policy is deprecated" in msg for msg in emitted)
         assert any("client_policy is deprecated" in msg for msg in emitted)
-        # Every deprecation must be versioned 3.0.0 for the export-migration set
+        # Every deprecation must be versioned 2.0.0 for the export-migration set
         for c in mock_module.deprecate.call_args_list:
             if any(
                 needle in c.args[0]
@@ -4357,7 +4357,7 @@ class TestPurefbFs:
                     "client_policy is deprecated",
                 )
             ):
-                assert c.kwargs["version"] == "3.0.0"
+                assert c.kwargs["version"] == "2.0.0"
                 assert c.kwargs["collection_name"] == "everpure.flashblade"
 
     @patch("plugins.modules.purefb_fs.FileSystemPost")
