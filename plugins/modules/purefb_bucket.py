@@ -246,9 +246,13 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import 
     get_system,
     purefb_argument_spec,
 )
+from ansible_collections.everpure.flashblade.plugins.module_utils.version import (
+    LooseVersion,
+)
 from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
-    human_to_bytes,
     get_error_message,
+    get_rest_api_version,
+    human_to_bytes,
 )
 
 SEC_PER_DAY = 86400000
@@ -261,8 +265,11 @@ CONTEXT_API_VERSION = "2.17"
 
 def get_s3acc(module, blade):
     """Return Object Store Account or None"""
-    api_version = list(blade.get_versions().items)
-    if CONTEXT_API_VERSION in api_version and module.params["context"]:
+    api_version = get_rest_api_version(blade)
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
         res = blade.get_object_store_accounts(
             context_names=[module.params["context"]],
             names=[module.params["account"]],
@@ -276,8 +283,11 @@ def get_s3acc(module, blade):
 
 def get_bucket(module, blade):
     """Return Bucket or None"""
-    api_version = list(blade.get_versions().items)
-    if CONTEXT_API_VERSION in api_version and module.params["context"]:
+    api_version = get_rest_api_version(blade)
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
         res = blade.get_buckets(
             context_names=[module.params["context"]],
             names=[module.params["name"]],
@@ -292,10 +302,13 @@ def get_bucket(module, blade):
 def create_bucket(module, blade):
     """Create bucket"""
     changed = True
-    api_version = list(blade.get_versions().items)
+    api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if VSO_VERSION in api_version:
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+        if LooseVersion(VSO_VERSION) <= LooseVersion(api_version):
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 account_defaults = list(
                     blade.get_object_store_accounts(
                         names=[module.params["account"]],
@@ -308,7 +321,7 @@ def create_bucket(module, blade):
                         names=[module.params["account"]]
                     ).items
                 )[0]
-            if QUOTA_VERSION in api_version:
+            if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
                 if not module.params["hard_limit"]:
                     module.params["hard_limit"] = account_defaults.hard_limit_enabled
                 if module.params["quota"]:
@@ -345,7 +358,10 @@ def create_bucket(module, blade):
                     account=ReferenceWritable(name=module.params["account"]),
                     bucket_type=module.params["mode"],
                 )
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.post_buckets(
                     names=[module.params["name"]],
                     bucket=bucket,
@@ -362,7 +378,7 @@ def create_bucket(module, blade):
                     )
                 )
             if module.params["versioning"] not in [None, "absent"]:
-                if QUOTA_VERSION in api_version:
+                if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
                     bucket = BucketPatch(
                         retention_lock=module.params["retention_lock"],
                         object_lock_config=ObjectLockConfigRequestBody(
@@ -381,7 +397,7 @@ def create_bucket(module, blade):
                         versioning=module.params["versioning"],
                     )
             else:
-                if QUOTA_VERSION in api_version:
+                if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
                     bucket = BucketPatch(
                         retention_lock=module.params["retention_lock"],
                         object_lock_config=ObjectLockConfigRequestBody(
@@ -400,7 +416,10 @@ def create_bucket(module, blade):
                         versioning=None,
                     )
 
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     names=[module.params["name"]],
                     bucket=bucket,
@@ -419,7 +438,10 @@ def create_bucket(module, blade):
             bucket = BucketPost(
                 account=ReferenceWritable(name=module.params["account"]),
             )
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.post_buckets(
                     names=[module.params["name"]],
                     bucket=bucket,
@@ -436,7 +458,10 @@ def create_bucket(module, blade):
                     )
                 )
             if module.params["versioning"] not in [None, "absent"]:
-                if CONTEXT_API_VERSION in api_version and module.params["context"]:
+                if (
+                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                    and module.params["context"]
+                ):
                     res = blade.buckets.patch_buckets(
                         names=[module.params["name"]],
                         bucket=BucketPatch(versioning=module.params["versioning"]),
@@ -453,7 +478,7 @@ def create_bucket(module, blade):
                             module.params["name"], get_error_message(res)
                         )
                     )
-        if MODE_VERSION in api_version:
+        if LooseVersion(MODE_VERSION) <= LooseVersion(api_version):
             if not module.params["block_new_public_policies"]:
                 module.params["block_new_public_policies"] = False
             if not module.params["block_public_access"]:
@@ -466,7 +491,10 @@ def create_bucket(module, blade):
                     block_public_access=module.params["block_public_access"],
                 )
             )
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     bucket=pac,
                     names=[module.params["name"]],
@@ -488,7 +516,10 @@ def create_bucket(module, blade):
                 policy = BucketAccessPolicyPost(
                     name=module.params["name"],
                 )
-                if CONTEXT_API_VERSION in api_version and module.params["context"]:
+                if (
+                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                    and module.params["context"]
+                ):
                     res = blade.post_buckets_bucket_access_policies(
                         bucket_names=[module.params["name"]],
                         policy=policy,
@@ -510,7 +541,10 @@ def create_bucket(module, blade):
                     principals=BucketAccessPolicyRulePrincipal(all=True),
                     resources=[module.params["name"] + "/*"],
                 )
-                if CONTEXT_API_VERSION in api_version and module.params["context"]:
+                if (
+                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                    and module.params["context"]
+                ):
                     res = blade.post_buckets_bucket_access_policies_rules(
                         bucket_names=[module.params["name"]],
                         rule=rule,
@@ -529,7 +563,10 @@ def create_bucket(module, blade):
                             module.params["name"], get_error_message(res)
                         )
                     )
-        if WORM_VERSION in api_version and module.params["eradication_mode"]:
+        if (
+            LooseVersion(WORM_VERSION) <= LooseVersion(api_version)
+            and module.params["eradication_mode"]
+        ):
             if not module.params["eradication_delay"]:
                 module.params["eradication_delay"] = SEC_PER_DAY
             else:
@@ -547,7 +584,10 @@ def create_bucket(module, blade):
                     eradication_delay=module.params["eradication_delay"],
                 )
             )
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     bucket=worm,
                     names=[module.params["name"]],
@@ -564,8 +604,11 @@ def create_bucket(module, blade):
 
 
 def _delete_bucket(module, blade):
-    api_version = list(blade.get_versions().items)
-    if CONTEXT_API_VERSION in api_version and module.params["context"]:
+    api_version = get_rest_api_version(blade)
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
         blade.patch_buckets(
             names=[module.params["name"]],
             bucket=BucketPatch(destroyed=True),
@@ -585,9 +628,12 @@ def _delete_bucket(module, blade):
 def delete_bucket(module, blade):
     """Delete Bucket"""
     changed = True
-    api_version = list(blade.get_versions().items)
+    api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if CONTEXT_API_VERSION in api_version and module.params["context"]:
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
             res = blade.patch_buckets(
                 names=[module.params["name"]],
                 bucket=BucketPatch(destroyed=True),
@@ -603,7 +649,10 @@ def delete_bucket(module, blade):
                 "Error: {1}".format(module.params["name"], get_error_message(res))
             )
         if module.params["eradicate"]:
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.delete_buckets(
                     names=[module.params["name"]],
                     context_names=[module.params["context"]],
@@ -621,9 +670,12 @@ def delete_bucket(module, blade):
 def recover_bucket(module, blade):
     """Recover Bucket"""
     changed = True
-    api_version = list(blade.get_versions().items)
+    api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if CONTEXT_API_VERSION in api_version and module.params["context"]:
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
             res = blade.patch_buckets(
                 names=[module.params["name"]],
                 bucket=BucketPatch(destroyed=False),
@@ -648,8 +700,11 @@ def update_bucket(module, blade, bucket):
     change_pac = False
     change_worm = False
     change_quota = False
-    api_version = list(blade.get_versions().items)
-    if CONTEXT_API_VERSION in api_version and module.params["context"]:
+    api_version = get_rest_api_version(blade)
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
         bucket_detail = list(
             blade.get_buckets(
                 names=[module.params["name"]], context_names=[module.params["context"]]
@@ -657,10 +712,10 @@ def update_bucket(module, blade, bucket):
         )[0]
     else:
         bucket_detail = list(blade.get_buckets(names=[module.params["name"]]).items)[0]
-    if VSO_VERSION in api_version:
+    if LooseVersion(VSO_VERSION) <= LooseVersion(api_version):
         if module.params["mode"] and bucket_detail.bucket_type != module.params["mode"]:
             module.warn("Changing bucket type is not permitted.")
-        if QUOTA_VERSION in api_version:
+        if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
             if (
                 bucket_detail.retention_lock == "ratcheted"
                 and getattr(
@@ -703,7 +758,10 @@ def update_bucket(module, blade, bucket):
         if bucket.versioning != versioning:
             changed = True
             if not module.check_mode:
-                if CONTEXT_API_VERSION in api_version and module.params["context"]:
+                if (
+                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                    and module.params["context"]
+                ):
                     res = blade.patch_buckets(
                         names=[module.params["name"]],
                         bucket=BucketPatch(versioning=versioning),
@@ -723,7 +781,10 @@ def update_bucket(module, blade, bucket):
     elif module.params["versioning"] not in [None, "absent"]:
         changed = True
         if not module.check_mode:
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     names=[module.params["name"]],
                     bucket=BucketPatch(versioning=module.params["versioning"]),
@@ -740,7 +801,7 @@ def update_bucket(module, blade, bucket):
                         module.params["name"], get_error_message(res)
                     )
                 )
-    if QUOTA_VERSION in api_version:
+    if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
         current_quota = {
             "quota": bucket_detail.quota_limit,
             "hard": bucket_detail.hard_limit_enabled,
@@ -774,7 +835,10 @@ def update_bucket(module, blade, bucket):
                     quota_limit=str(new_quota["quota"]),
                     hard_limit_enabled=new_quota["hard"],
                 )
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     bucket=bucket,
                     names=[module.params["name"]],
@@ -787,7 +851,7 @@ def update_bucket(module, blade, bucket):
                     msg="Failed to update quota settings correctly for bucket {0}. "
                     "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
-    if MODE_VERSION in api_version:
+    if LooseVersion(MODE_VERSION) <= LooseVersion(api_version):
         current_pac = {
             "block_new_public_policies": bucket_detail.public_access_config.block_new_public_policies,
             "block_public_access": bucket_detail.public_access_config.block_public_access,
@@ -813,7 +877,10 @@ def update_bucket(module, blade, bucket):
                 )
             )
         if change_pac and not module.check_mode:
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     bucket=pac,
                     names=[module.params["name"]],
@@ -826,7 +893,7 @@ def update_bucket(module, blade, bucket):
                     msg="Failed to update Public Access config correctly for bucket {0}. "
                     "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
-    if WORM_VERSION in api_version:
+    if LooseVersion(WORM_VERSION) <= LooseVersion(api_version):
         current_worm = {
             "eradication_delay": bucket_detail.eradication_config.eradication_delay,
             "manual_eradication": bucket_detail.eradication_config.manual_eradication,
@@ -865,7 +932,10 @@ def update_bucket(module, blade, bucket):
                 )
             )
         if change_worm and not module.check_mode:
-            if CONTEXT_API_VERSION in api_version and module.params["context"]:
+            if (
+                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+                and module.params["context"]
+            ):
                 res = blade.patch_buckets(
                     bucket=worm,
                     names=[module.params["name"]],
@@ -884,9 +954,12 @@ def update_bucket(module, blade, bucket):
 def eradicate_bucket(module, blade):
     """Eradicate Bucket"""
     changed = True
-    api_version = list(blade.get_versions().items)
+    api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if CONTEXT_API_VERSION in api_version and module.params["context"]:
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
             res = blade.delete_buckets(
                 names=[module.params["name"]], context_names=[module.params["context"]]
             )
@@ -949,15 +1022,18 @@ def main():
 
     state = module.params["state"]
     blade = get_system(module)
-    api_version = list(blade.get_versions().items)
-    if CONTEXT_API_VERSION in api_version and not module.params["context"]:
+    api_version = get_rest_api_version(blade)
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and not module.params["context"]
+    ):
         # If no context is provided set the context to the local array name
         fleet_res = blade.get_fleets()
         if fleet_res.status_code == 200 and list(fleet_res.items):
             module.params["context"] = list(blade.get_arrays().items)[0].name
 
     # From REST 2.12 classic is no longer the default mode
-    if MODE_VERSION in api_version:
+    if LooseVersion(MODE_VERSION) <= LooseVersion(api_version):
         if not module.params["mode"]:
             module.params["mode"] = "multi-site-writable"
     elif not module.params["mode"]:
