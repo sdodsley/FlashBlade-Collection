@@ -151,11 +151,43 @@ plugins:
       name: purefb_lifecycle
       namespace: ''
       version_added: 1.4.0
+    purefb_local_ds:
+      description: Manage FlashBlade Local Directory Services
+      name: purefb_local_ds
+      namespace: ''
+      version_added: 1.28.0
+    purefb_local_group:
+      description: Manage FlashBlade Local Directory Service groups
+      name: purefb_local_group
+      namespace: ''
+      version_added: 1.28.0
+    purefb_local_user:
+      description: Manage FlashBlade Local Directory Service users
+      name: purefb_local_user
+      namespace: ''
+      version_added: 1.28.0
     purefb_messages:
       description: List FlashBlade Alert Messages
       name: purefb_messages
       namespace: ''
       version_added: 1.10.0
+    purefb_mgmt_auth_policy:
+      description: Manage FlashBlade Management Authentication Policies and their
+        members
+      name: purefb_mgmt_auth_policy
+      namespace: ''
+      version_added: 1.28.0
+    purefb_mgmt_policy:
+      description: Manage FlashBlade Management Access Policies and their rules
+      name: purefb_mgmt_policy
+      namespace: ''
+      version_added: 1.28.0
+    purefb_mgmt_role:
+      description: Manage FlashBlade custom management roles, permissions, and policy
+        attachment
+      name: purefb_mgmt_role
+      namespace: ''
+      version_added: 1.28.0
     purefb_network:
       description: Manage network interfaces in a Everpure FlashBlade
       name: purefb_network
@@ -166,6 +198,11 @@ plugins:
       name: purefb_ntp
       namespace: ''
       version_added: 1.0.0
+    purefb_password_policy:
+      description: Manage the FlashBlade management password policy
+      name: purefb_password_policy
+      namespace: ''
+      version_added: 1.28.0
     purefb_phonehome:
       description: Enable or Disable Everpure FlashBlade Phone Home
       name: purefb_phonehome
@@ -201,6 +238,11 @@ plugins:
       name: purefb_remote_cred
       namespace: ''
       version_added: 1.0.0
+    purefb_resource_access:
+      description: Manage Resource Access on Everpure FlashBlades
+      name: purefb_resource_access
+      namespace: ''
+      version_added: 1.28.0
     purefb_s3_export_policy:
       description: Manage FlashBlade S3 Export Policies
       name: purefb_s3_export_policy
@@ -271,6 +313,11 @@ plugins:
       name: purefb_timeout
       namespace: ''
       version_added: 1.6.0
+    purefb_tls_policy:
+      description: Manage FlashBlade TLS policies
+      name: purefb_tls_policy
+      namespace: ''
+      version_added: 1.28.0
     purefb_tz:
       description: Configure Everpure FlashBlade timezone
       name: purefb_tz
@@ -301,4 +348,4 @@ plugins:
   strategy: {}
   test: {}
   vars: {}
-version: 1.27.0
+version: 1.28.0

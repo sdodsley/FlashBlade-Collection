@@ -1,8 +1,0 @@
-bugfixes:
-  - purefb_info - Fixed the ``arrays`` subset raising ``AttributeError`` on any array
-    with a replication connection. The loop variable was rebound to the remote array
-    name before every field was read from it, so ``gather_subset=all`` failed too.
-  - purefb_info - Fixed the ``policies`` subset raising ``AttributeError`` when a
-    bucket access policy exists. ``BucketAccessPolicy`` has no ``description`` field,
-    unlike the object store access policy reported alongside it; the key is now
-    reported as null.

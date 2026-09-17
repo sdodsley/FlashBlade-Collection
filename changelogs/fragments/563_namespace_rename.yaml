@@ -1,3 +1,0 @@
-major_changes:
-     - This collection has been renamed from purestorage.flashblade to everpure.flashblade.
-       The purestorage.flashblade namespace is now a redirect-only deprecation stub.

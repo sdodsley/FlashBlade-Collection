@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_info - Fix AttributeError in `policies` subset when any policy exists; `snapshot_policies` now reports snapshot policies with rules and `policies` reports a cross-type policy summary

@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_realm - Pass the new optional ``without_default_access_list`` parameter (default false) to post_realms, as required by py-pure-client when creating a realm
