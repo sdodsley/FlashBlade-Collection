@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_realm - Fixed incorrect documentation for ``purefb_realm`` module that was causing confusion about the required parameters. Changed from fa_url to fb_url

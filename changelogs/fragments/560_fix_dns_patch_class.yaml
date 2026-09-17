@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_dns - Fix incorrect ``DnsPatch`` class reference (now ``DnsPost``) that made the module wrongly report py-pure-client as not installed

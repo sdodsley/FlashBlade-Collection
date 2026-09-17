@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_remote_cred - Fix reference to non-existent ``ObjectStoreRemoteCredentialsPatch`` class in py-pure-client, which caused the module to incorrectly report that the SDK was not installed
