@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_server - When a server existed and it should update the existing server. This will use the dns variable from the loop instead of referencing it.

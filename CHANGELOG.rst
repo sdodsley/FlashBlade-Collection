@@ -4,6 +4,102 @@ Everpure.Flashblade Release Notes
 
 .. contents:: Topics
 
+v1.28.0
+=======
+
+Major Changes
+-------------
+
+- This collection has been renamed from purestorage.flashblade to everpure.flashblade. The purestorage.flashblade namespace is now a redirect-only deprecation stub.
+
+Minor Changes
+-------------
+
+- purefb_ad - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_admin - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_bucket - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_bucket - The ``versioning`` parameter no longer defaults to ``absent``. Omitting it now leaves the bucket's versioning state unchanged. Set ``versioning`` to ``absent`` explicitly to suspend versioning on a bucket.
+- purefb_bucket_access - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_bucket_replica - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_certs - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_connect - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_dns - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_ds - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_export - Add examples documenting the migration path from ``purefb_fs``'s ``export_policy``, ``share_policy`` and ``client_policy`` parameters
+- purefb_export - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_export - Warn when creating an export at a (name, filesystem, server) address where an export of the other protocol already exists; almost always a mistyped ``type:`` parameter
+- purefb_export - Warn when the filesystem still carries a legacy ``nfs.export_policy``, ``smb.share_policy`` or ``smb.client_policy``. For SMB the check fires even without the matching field
+- purefb_fs - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_fs_replica - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_groupquota - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_hardware - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_info - Add ``password_policies`` section to the ``policies`` subset reporting the management password policy with durations in seconds (REST 2.16 and higher)
+- purefb_info - Add per-filesystem ``file_system_exports`` list under ``filesystems`` and a top-level ``file_system_exports`` view; use instead of the legacy filesystem-level policy keys
+- purefb_info - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_inventory - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_kmip - Add ``ca_certificate_group`` to reference a certificate group rather than a single certificate.
+- purefb_kmip - Only the settings that differ are now sent on update, so an unrelated change no longer resends the CA reference.
+- purefb_lifecycle - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_pingtrace - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_policy - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_ra - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_remote_cred - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_s3acc - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_s3user - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_saml - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_server - Add ``local_directory_service`` option to manage the server's local directory service reference on both create and update. Requires REST API 2.24 or higher.
+- purefb_server - Switch REST API version gating from membership-style ``not in api_version`` to the standard ``LooseVersion`` comparison used by the rest of the collection.
+- purefb_smtp - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_snap - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_syslog - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_user - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_userpolicy - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_userquota - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+- purefb_virtualhost - Migrate REST API version checks to get_rest_api_version and LooseVersion comparisons
+
+Deprecated Features
+-------------------
+
+- purefb_fs - Deprecate ``client_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.client_policy`` as deprecated. Removed in 2.0.0
+- purefb_fs - Deprecate ``export_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``nfs.export_policy`` as deprecated. Removed in 2.0.0
+- purefb_fs - Deprecate ``share_policy`` in favour of ``purefb_export`` (uses File System Exports); Purity//FB marks the underlying ``smb.share_policy`` as deprecated. Removed in 2.0.0
+- purefb_info - Deprecate ``filesystems`` subset keys ``nfs_rules``, ``export_policy``, ``smb_client_policy`` and ``smb_share_policy``; use ``file_system_exports`` instead. Removed in 2.0.0
+
+Bugfixes
+--------
+
+- purefb_bucket - Fixed a task that does not specify ``versioning`` silently suspending versioning on an existing versioned bucket, because the parameter defaulted to ``absent``.
+- purefb_bucket - Fixed idempotency error when ``versioning`` is ``absent`` and the bucket's versioning is already ``suspended``. The module sent the literal string ``absent`` to the API, which rejected it with "Versioning can only be set to 'enabled' or 'suspended'".
+- purefb_info - Fix AttributeError in `policies` subset when any policy exists; `snapshot_policies` now reports snapshot policies with rules and `policies` reports a cross-type policy summary
+- purefb_info - Fix AttributeError in `snapshot_policies` subset when a policy has no rules, or when an older py-pure-client returns a policy object without a `rules` attribute
+- purefb_info - Fix default subset version gating so encryption, network access protocol and remote assist duration details are reported when the array supports them
+- purefb_info - Fixed the ``arrays`` subset raising ``AttributeError`` on any array with a replication connection. The loop variable was rebound to the remote array name before every field was read from it, so ``gather_subset=all`` failed too.
+- purefb_info - Fixed the ``policies`` subset raising ``AttributeError`` when a bucket access policy exists. ``BucketAccessPolicy`` has no ``description`` field, unlike the object store access policy reported alongside it; the key is now reported as null.
+- purefb_info - The ``default`` subset's ``api_versions`` value now reports the highest REST API version the array supports, rather than the lowest. It previously read the first entry of the supported-versions list.
+- purefb_kmip - Fixed ``state=test`` reporting ``changed=true`` for what is a read-only connectivity check.
+- purefb_kmip - Fixed the 3000 character limit being applied to ``certificate``, a name, rather than to the certificate text it was documented against.
+- purefb_kmip - Fixed the module being entirely non-functional. ``ca_certificate`` was sent as certificate text where the API expects a reference to a certificate already on the array, raising ``ValidationError``; ``certificate`` was sent as a field that does not exist on any REST version, so it was silently discarded; and reading it back raised ``AttributeError``, so updates could not complete at all.
+- purefb_network - Added ``attached_server`` parameter so a network interface can be attached to a specific server rather than always landing on the default server, and so an existing interface can be moved to another server. Requires REST API 2.16 or higher.
+- purefb_realm - Pass the new optional ``without_default_access_list`` parameter (default false) to post_realms, as required by py-pure-client when creating a realm
+- purefb_server - Correct the ``directory_service`` update path which wrote to ``Server.dns`` instead of ``Server.directory_services`` and could silently replace the DNS list.
+- purefb_server - Fix ``ValidationError`` on ``state=present`` when ``dns`` or ``directory_service`` is set — the update path passed the whole list to ``Reference(name=...)`` instead of iterating.
+- purefb_server - Fixed ``dns`` and ``directory_service`` updates being applied to the array even when running in check mode.
+- purefb_server - When a server existed and it should update the existing server. This will use the dns variable from the loop instead of referencing it.
+- purefb_userpolicy - Fix adding a policy to an existing user silently failing to persist on REST 2.17+ while still reporting changed, due to a stray second non-context POST
+
+New Modules
+-----------
+
+- everpure.flashblade.purefb_local_ds - Manage FlashBlade Local Directory Services
+- everpure.flashblade.purefb_local_group - Manage FlashBlade Local Directory Service groups
+- everpure.flashblade.purefb_local_user - Manage FlashBlade Local Directory Service users
+- everpure.flashblade.purefb_mgmt_auth_policy - Manage FlashBlade Management Authentication Policies and their members
+- everpure.flashblade.purefb_mgmt_policy - Manage FlashBlade Management Access Policies and their rules
+- everpure.flashblade.purefb_mgmt_role - Manage FlashBlade custom management roles, permissions, and policy attachment
+- everpure.flashblade.purefb_password_policy - Manage the FlashBlade management password policy
+- everpure.flashblade.purefb_resource_access - Manage Resource Access on Everpure FlashBlades
+- everpure.flashblade.purefb_tls_policy - Manage FlashBlade TLS policies
+
 v1.27.0
 =======
 
