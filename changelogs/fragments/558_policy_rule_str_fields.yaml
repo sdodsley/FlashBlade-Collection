@@ -1,3 +1,0 @@
-bugfixes:
-  - purefb_policy - Fixed a regression where updating an existing NFS export, SMB share, SMB client or network access policy rule failed with a pydantic ``str type expected`` error.
-  - purefb_policy - Rule updates now send the original string values to the API rather than the sorted values used only for the idempotency comparison.
