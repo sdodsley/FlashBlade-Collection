@@ -14,6 +14,7 @@ jobs:
     name: Build flashblade on Ansible ${{ matrix.ansible }} (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         ansible:
           - stable-2.16
@@ -67,6 +68,7 @@ jobs:
     name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version:
           - "3.12"
