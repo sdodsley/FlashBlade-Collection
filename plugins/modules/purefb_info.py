@@ -154,6 +154,8 @@ def generate_default_dict(blade):
     defaults = list(blade.get_arrays().items)[0]
     default_info["flashblade_name"] = defaults.name
     default_info["purity_version"] = defaults.version
+    # the login (MOTD) banner, so purefb_banner changes can be read back
+    default_info["banner"] = getattr(defaults, "banner", None)
     default_info["filesystems"] = blade.get_file_systems().total_item_count
     default_info["snapshots"] = blade.get_file_system_snapshots().total_item_count
     default_info["buckets"] = blade.get_buckets().total_item_count

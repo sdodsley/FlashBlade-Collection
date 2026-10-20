@@ -424,6 +424,7 @@ class TestPurefbInfo:
         mock_array.id = "12345"
         mock_array.os = "Purity//FB"
         mock_array.version = "3.0.0"
+        mock_array.banner = "Welcome to the lab"
         mock_array.idle_timeout = 600000  # 10 minutes in milliseconds
         mock_blade.get_arrays.return_value.items = [mock_array]
 
@@ -537,6 +538,7 @@ class TestPurefbInfo:
         assert result["flashblade_name"] == "test-array"
         assert "purity_version" in result
         assert result["purity_version"] == "3.0.0"
+        assert result["banner"] == "Welcome to the lab"
         assert "buckets" in result
         assert result["buckets"] == 5
         assert "filesystems" in result
