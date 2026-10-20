@@ -202,11 +202,11 @@ def break_connection(module, blade, target_blade):
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
             and module.params["context"]
         ):
-            source_blade = (
-                blade.get_arrays(context_names=[module.params["context"]]).items[0].name
-            )
+            source_blade = list(
+                blade.get_arrays(context_names=[module.params["context"]]).items
+            )[0].name
         else:
-            source_blade = blade.get_arrays().items[0].name
+            source_blade = list(blade.get_arrays().items)[0].name
         if target_blade.management_address is None:
             module.fail_json(
                 msg="Disconnect can only happen from the array that formed the connection"

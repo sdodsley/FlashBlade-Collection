@@ -157,6 +157,11 @@ bugfixes:
     and omitted ``enabled`` or ``ports`` no longer report a change.
   - purefb_connect - fixed a ``NameError`` when setting a throttle on an unthrottled connection;
     the bandwidth range check now rejects out-of-range values.
+  - purefb_connect - ``state=absent`` no longer crashes with ``TypeError`` (the SDK item iterator
+    was indexed directly), so an array connection can be removed again.
+  - purefb_info - ``gather_subset=replication`` (and ``all``) no longer crashes with
+    ``AttributeError`` when a filesystem replica link exists; the link status detail is read from
+    the SDK's ``status_details`` attribute.
   - purefb_fleet - adding a member fails with a clear message when only one of ``member_url`` and
     ``member_api`` is supplied instead of crashing.
   - purefb_target - changing a target address uses ``patch_targets`` instead of a removed 1.x SDK

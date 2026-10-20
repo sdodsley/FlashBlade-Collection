@@ -94,6 +94,7 @@ from plugins.modules.purefb_info import (
     generate_object_store_virtual_hosts_dict,
     generate_realms_dict,
     generate_resource_accesses_dict,
+    generate_file_repl_dict,
 )
 
 
@@ -1136,6 +1137,7 @@ class TestPurefbInfo:
         assert result["net2"]["lag"] is None
         assert result["net2"]["vlan"] is None
         assert result["net2"]["interfaces"] == [{"name": "vip1"}]
+
     def test_generate_network_dict_reads_attached_servers_and_subnet(self):
         """server comes from attached_servers[0] and subnet may be a dict.
 
@@ -1552,3 +1554,54 @@ class TestPurefbInfo:
                 "scope_type": "realms",
             }
         ]
+
+    def test_generate_file_repl_dict_reads_status_details(self):
+        """The SDK replica link model has status_details, not status_detail.
+
+        Reading status_detail raised AttributeError as soon as a filesystem
+        replica link existed, which broke the replication (and all) subsets.
+        The spec'd mock has no status_detail attribute, matching the model;
+        the output key keeps its historical name.
+        """
+        remote = Mock(spec=["name"])
+        remote.name = "peer"
+        remote_fs = Mock(spec=["name"])
+        remote_fs.name = "fs1"
+        local_fs = Mock(spec=["name"])
+        local_fs.name = "fs1"
+        policy = Mock(spec=["display_name"])
+        policy.display_name = "daily"
+        link = Mock(
+            spec=[
+                "local_file_system",
+                "direction",
+                "link_type",
+                "lag",
+                "status",
+                "status_details",
+                "remote",
+                "remote_file_system",
+                "recovery_point",
+                "policies",
+            ]
+        )
+        link.local_file_system = local_fs
+        link.direction = "outbound"
+        link.link_type = "periodic"
+        link.lag = 0
+        link.status = "replicating"
+        link.status_details = None
+        link.remote = remote
+        link.remote_file_system = remote_fs
+        link.recovery_point = 1700000000000
+        link.policies = [policy]
+
+        mock_blade = Mock()
+        mock_blade.get_file_system_replica_links.return_value.items = [link]
+
+        result = generate_file_repl_dict(mock_blade)
+
+        assert result["fs1"]["status"] == "replicating"
+        assert result["fs1"]["status_detail"] is None
+        assert result["fs1"]["remote_fs"] == "peer:fs1"
+        assert result["fs1"]["policies"] == ["daily"]

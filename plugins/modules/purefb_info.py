@@ -642,7 +642,9 @@ def generate_file_repl_dict(blade):
             "link_type": file_link.link_type,
             "lag": file_link.lag,
             "status": file_link.status,
-            "status_detail": file_link.status_detail,
+            # the SDK model calls this status_details; the key is kept for
+            # backwards compatibility
+            "status_detail": getattr(file_link, "status_details", None),
             "remote_fs": file_link.remote.name
             + ":"
             + file_link.remote_file_system.name,
