@@ -26,19 +26,30 @@ description:
   will try to ensure that any required snapshots deleted on the deletion of
   the first rule will be recovered as long replacement rule is added before
   the snapshot eradication period is exceeded (usuually 24 hours).
+- Network access policies cannot be created or deleted on FlashBlade.
+  I(policy_type=network) manages the rules of an existing network access
+  policy (normally C(default-network-access-policy)).
+- Rule fields that are not set in a task keep their current value when an
+  existing rule is updated; the documented defaults are only applied when a
+  new rule is created.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
   state:
     description:
     - Create or delete policy.
-    - Copy is applicable only to Object Store Access Policies Rules
+    - I(copy) copies a single rule for Object Store Access Policies
+      (I(rule) and I(target) in C(account/policy) form are required).
+    - For snapshot, NFS, SMB and WORM policies I(copy) creates I(target) as a
+      new policy with the same settings and rules as I(name).
+    - Network access policies cannot be copied.
     default: present
     type: str
     choices: [ absent, present, copy ]
   target:
     description:
-    - Name of policy to copy rule to
+    - Name of policy to copy rule to, or name of the new policy to create
+      when copying a whole policy.
     type: str
     version_added: "1.9.0"
   target_rule:
@@ -70,8 +81,9 @@ options:
     description:
     - Allow S3 requests that match all of the I(actions) item selected.
       Rules are additive.
+    - Also the effect of a network access policy rule.
+    - Defaults to I(allow) when a new rule is created.
     type: str
-    default: allow
     choices: [ allow, deny ]
     version_added: "1.9.0"
   actions:
@@ -215,25 +227,23 @@ options:
   access:
     description:
     - Specifies access control for the export policy rule
+    - Defaults to I(root-squash) when a new rule is created.
     type: str
     choices: [ root-squash, all-squash, no-squash ]
-    default: root-squash
     version_added: "1.9.0"
   anonuid:
     description:
     - Any user whose UID is affected by an I(access) of `root_squash` or `all_squash`
       will have their UID mapped to anonuid.
       The default is null, which means 65534.
-      Use "" to clear.
-    type: str
+    type: int
     version_added: "1.9.0"
   anongid:
     description:
     - Any user whose GID is affected by an I(access) of `root_squash` or `all_squash`
       will have their GID mapped to anongid.
       The default anongid is null, which means 65534.
-      Use "" to clear.
-    type: str
+    type: int
     version_added: "1.9.0"
   atime:
     description:
@@ -242,8 +252,8 @@ options:
       inode modify time, the previous access time is less than the inode change time,
       or the previous access time is more than 24 hours ago.
     - If set to false, disables the update of inode access times after read operations.
+    - Defaults to true when a new rule is created.
     type: bool
-    default: true
     version_added: "1.9.0"
   client:
     description:
@@ -255,23 +265,23 @@ options:
   fileid_32bit:
     description:
     - Whether the file id is 32 bits or not.
+    - Defaults to false when a new rule is created.
     type: bool
-    default: false
     version_added: "1.9.0"
   permission:
     description:
     - Specifies which read-write client access permissions are allowed for the export.
+    - Defaults to I(ro) when a new rule is created.
     type: str
     choices: [ rw, ro ]
-    default: ro
     version_added: "1.9.0"
   secure:
     description:
     - If true, this prevents NFS access to client connections coming from non-reserved ports.
     - If false, allows NFS access to client connections coming from non-reserved ports.
     - Applies to NFSv3, NFSv4.1, and auxiliary protocols MOUNT and NLM.
+    - Defaults to false when a new rule is created.
     type: bool
-    default: false
     version_added: "1.9.0"
   security:
     description:
@@ -281,20 +291,25 @@ options:
     - I(krb) provides cryptographic proof of a users identity in each RPC request.
     - I(krb5i) adds integrity checking to krb5, to ensure the data has not been tampered with.
     - I(krb5p) adds integrity checking and encryption to krb5.
+    - Defaults to C([sys]) when a new rule is created.
     type: list
     elements: str
     choices: [ sys, krb5, krb5i, krb5p ]
-    default: sys
     version_added: "1.9.0"
   before_rule:
     description:
     - The index of the client rule to insert or move a client rule before.
+    - Not supported for SMB share policies, whose rules are unordered.
     type: int
     version_added: "1.9.0"
   rename:
     description:
     - New name for policy
-    - Only applies to NFS and SMB policies
+    - Applies to snapshot, NFS, SMB and network access policies.
+    - WORM data policies cannot be renamed.
+    - Purity//FB up to at least 4.6.4 (REST 2.21) ignores a new name for
+      snapshot policies; the module fails instead of reporting a rename
+      the array did not perform.
     type: str
     version_added: "1.10.0"
   destroy_snapshots:
@@ -312,6 +327,10 @@ options:
     description:
      - The state of the SMB share principals Change access permission.
      - Setting to "" will clear the current setting
+     - Share permissions form the ladder I(read), I(change), I(full_control)
+       with a single effect per rule. Setting a level applies its effect to
+       the levels below it; a level set to the opposite effect above the
+       granted ones, or to "", is not granted, as the array stores it.
     type: str
     choices: [ allow, deny, "" ]
     version_added: '1.12.0'
@@ -319,6 +338,7 @@ options:
     description:
      - The state of the SMB share principals Read access permission.
      - Setting to "" will clear the current setting
+     - See I(change) for how the share permission levels interact.
     type: str
     choices: [ allow, deny, "" ]
     version_added: '1.12.0'
@@ -326,15 +346,16 @@ options:
     description:
      - The state of the SMB share principals Full Control access permission.
      - Setting to "" will clear the current setting
+     - See I(change) for how the share permission levels interact.
     type: str
     choices: [ allow, deny, "" ]
     version_added: '1.12.0'
   smb_encryption:
     description:
      - The status of SMB encryption in a client policy rule
+     - Defaults to I(optional) when a new rule is created.
     type: str
     choices: [ disabled, optional, required ]
-    default: optional
     version_added: '1.12.0'
   desc:
     description:
@@ -348,6 +369,8 @@ options:
     description:
     - Specifies which product interfaces the network access policy rule
       applies to, whether it is permitting or denying access.
+    - Required for I(policy_type=network); only used when a rule is created
+      or updated.
     type: list
     elements: str
     choices: [ "management-ssh", "management-rest-api", "management-web-ui", "snmp", "local-network-superuser-password-access" ]
@@ -575,6 +598,24 @@ EXAMPLES = r"""
     rename: new_name
     fb_url: 10.10.10.2
     api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
+- name: Copy an NFS Export Policy, including its rules, to a new policy
+  everpure.flashblade.purefb_policy:
+    name: test_nfs_export
+    policy_type: nfs
+    target: test_nfs_export_copy
+    state: copy
+    fb_url: 10.10.10.2
+    api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
+- name: Add a rule to the default network access policy
+  everpure.flashblade.purefb_policy:
+    name: default-network-access-policy
+    policy_type: network
+    client: 10.0.1.0/24
+    effect: deny
+    interfaces:
+      - management-ssh
+    fb_url: 10.10.10.2
+    api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
 - name: Create a WORM Data Policy
   everpure.flashblade.purefb_policy:
     name: worm1
@@ -594,7 +635,6 @@ try:
     from pypureclient.flashblade import (
         PolicyRuleObjectAccessCondition,
         PolicyRuleObjectAccessPost,
-        PolicyRuleObjectAccess,
         NfsExportPolicy,
         NfsExportPolicyRule,
         Policy,
@@ -616,7 +656,7 @@ HAS_PYTZ = True
 try:
     import pytz
 except ImportError:
-    HAS_PYTX = False
+    HAS_PYTZ = False
 
 import os
 import re
@@ -648,6 +688,9 @@ SMB_ENCRYPT_API_VERSION = "2.11"
 NET_POLICY_API_VERSION = "2.13"
 WORM_POLICY_API_VERSION = "2.15"
 CONTEXT_API_VERSION = "2.17"
+# From REST 2.22 the NFS export rule anonuid/anongid are integers on the wire;
+# older arrays declare and accept them only as strings.
+NFS_ANON_INT_API_VERSION = "2.22"
 
 
 def _get_local_tz(module, timezone="UTC"):
@@ -724,6 +767,187 @@ def _get_local_tz(module, timezone="UTC"):
     return timezone
 
 
+def _context_kwargs(module, versions):
+    """Return the ``context_names`` keyword for fleet-aware SDK calls.
+
+    An empty dict is returned when the array is below the context API version
+    or no context is set, so callers can always splat the result.
+    """
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
+        and module.params["context"]
+    ):
+        return {"context_names": [module.params["context"]]}
+    return {}
+
+
+def _default(value, default):
+    """Return I(default) when the task did not set I(value)."""
+    return default if value is None else value
+
+
+def _blank_to_none(value):
+    """Treat "" (used by the task to clear a setting) the same as unset."""
+    return None if value == "" else value
+
+
+def _sorted_or_none(values):
+    """Sorted copy of a list for order-insensitive comparison; [] is unset."""
+    return sorted(values) if values else None
+
+
+# SMB share permissions, lowest level first.
+_SHARE_LEVELS = ("read", "change", "full_control")
+
+
+def _share_rule_perms(current, requested):
+    """Return the permissions the array stores once I(requested) is applied.
+
+    Purity//FB keeps an SMB share rule as one access control entry: the
+    permissions form the ladder read < change < full_control, every granted
+    level carries the single effect of the rule and the levels above the
+    highest granted one are reported as None. Setting a level grants (or
+    denies) it together with every level below it. A level set to the
+    opposite effect above the granted ones (``full_control=deny`` next to
+    ``read``/``change`` ``allow``), or set to "", is simply not granted, like
+    everything above it. Levels the task leaves unset keep their current
+    value.
+    """
+    merged = {}
+    for level in _SHARE_LEVELS:
+        value = requested.get(level)
+        if value is None:
+            value = current.get(level)
+        merged[level] = _blank_to_none(value)
+    # The task's own values decide the effect; unset levels only inherit.
+    effect = None
+    explicit_top = -1
+    for index, level in enumerate(_SHARE_LEVELS):
+        value = requested.get(level)
+        if value is None:
+            continue
+        if effect is None and value in ("allow", "deny"):
+            effect = value
+        if value != effect:
+            break
+        explicit_top = index
+    if effect is None:
+        for level in _SHARE_LEVELS:
+            if merged[level] in ("allow", "deny"):
+                effect = merged[level]
+                break
+    result = {}
+    granted = effect is not None
+    for index, level in enumerate(_SHARE_LEVELS):
+        value = effect if index <= explicit_top else merged[level]
+        granted = granted and value == effect
+        result[level] = effect if granted else None
+    return result
+
+
+def _share_rule_desired(module, live_perms):
+    """Permissions the task asks for, applied over I(live_perms)."""
+    perms = _share_rule_perms(
+        live_perms, {level: module.params[level] for level in _SHARE_LEVELS}
+    )
+    if not any(perms.values()):
+        module.fail_json(
+            msg="SMB share rule for principal {0} must allow or deny at least "
+            "read; use state=absent to remove the rule".format(
+                module.params["principal"]
+            )
+        )
+    return perms
+
+
+def _share_rule_top(perms):
+    """Return (effect, index of the highest granted level) of a rule."""
+    top = max(
+        index for index, level in enumerate(_SHARE_LEVELS) if perms[level] is not None
+    )
+    return perms["read"], top
+
+
+def _share_rule_patch(current, desired):
+    """Return the one-field PATCH body that turns I(current) into I(desired).
+
+    The array grants (or denies) a level together with every level below it
+    and drops the levels above it when the effect changes, so one field is
+    enough: the new top level with its effect, or "" on the level above the
+    new top when the rule keeps its effect and only loses levels.
+    """
+    current_effect, current_top = _share_rule_top(current)
+    new_effect, new_top = _share_rule_top(desired)
+    if new_effect != current_effect or new_top > current_top:
+        return {_SHARE_LEVELS[new_top]: new_effect}
+    return {_SHARE_LEVELS[new_top + 1]: ""}
+
+
+def _anon_id(value):
+    """Normalise anonuid/anongid for comparison.
+
+    REST 2.21 and older report the ids as strings, newer arrays as integers;
+    None and "" both mean "not set".
+    """
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _nfs_rule(versions, **fields):
+    """Build the request body of an NFS export policy rule.
+
+    The SDK's ``NfsExportPolicyRule`` follows the newest REST version, where
+    anonuid/anongid are integers, and rejects strings. Arrays below REST 2.22
+    declare the ids as strings and reject integers on PATCH, so for those the
+    body is sent as a plain dict (which the SDK passes through unchanged) with
+    the ids rendered as strings. Fields set to None are left out either way.
+    """
+    fields = {key: value for key, value in fields.items() if value is not None}
+    if LooseVersion(NFS_ANON_INT_API_VERSION) <= LooseVersion(versions):
+        return NfsExportPolicyRule(**fields)
+    for key in ("anonuid", "anongid"):
+        if key in fields:
+            fields[key] = str(fields[key])
+    return fields
+
+
+def _nfs_rule_from_params(module, versions):
+    """Build a new NFS export rule from the task.
+
+    The array defaults are applied to any rule field the task did not set.
+    """
+    return _nfs_rule(
+        versions,
+        client=module.params["client"],
+        permission=_default(module.params["permission"], "ro"),
+        access=_default(module.params["access"], "root-squash"),
+        anonuid=_anon_id(module.params["anonuid"]),
+        anongid=_anon_id(module.params["anongid"]),
+        fileid_32bit=_default(module.params["fileid_32bit"], False),
+        atime=_default(module.params["atime"], True),
+        secure=_default(module.params["secure"], False),
+        security=_default(module.params["security"], ["sys"]),
+    )
+
+
+def _smb_client_rule_from_params(module, versions):
+    """Build a new SMB client rule from the task.
+
+    The array defaults are applied to any rule field the task did not set.
+    """
+    if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
+        return SmbClientPolicyRule(
+            client=module.params["client"],
+            permission=_default(module.params["permission"], "ro"),
+            encryption=_default(module.params["smb_encryption"], "optional"),
+        )
+    return SmbClientPolicyRule(
+        client=module.params["client"],
+        permission=_default(module.params["permission"], "ro"),
+    )
+
+
 def delete_smb_share_policy(module, blade):
     """Delete SMB Share Policy, or Rule
 
@@ -749,19 +973,19 @@ def delete_smb_share_policy(module, blade):
                 policy_names=[module.params["name"]],
                 filter="principal='" + module.params["principal"] + "'",
             )
-        if prin_rule.status_code == 200:
+        # A filter that matches nothing is a 200 with no items, so guard the
+        # lookup or the second delete of the same principal raises IndexError.
+        if prin_rule.status_code == 200 and prin_rule.total_item_count != 0:
             rule = list(prin_rule.items)[0]
             changed = True
             if not module.check_mode:
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                    and module.params["context"]
-                ):
-                    res = blade.delete_smb_share_policies_rules(
-                        names=[rule.name], context_names=[module.params["context"]]
-                    )
-                else:
-                    res = blade.delete_smb_share_policies_rules(names=[rule.name])
+                # Share rule names are the principal, unique only within the
+                # policy, so the policy must be named as well.
+                res = blade.delete_smb_share_policies_rules(
+                    policy_names=[module.params["name"]],
+                    names=[rule.name],
+                    **_context_kwargs(module, versions),
+                )
                 if res.status_code != 200:
                     module.fail_json(
                         msg="Failed to delete rule for principal {0} in policy {1}. "
@@ -877,11 +1101,13 @@ def create_smb_share_policy(module, blade):
         if not module.params["principal"]:
             module.fail_json(msg="principal is required to create a new rule")
         else:
+            # Send the permissions as the array stores them (see
+            # _share_rule_perms); the raw task values can mix allow and deny,
+            # which POST rejects.
+            perms = _share_rule_desired(module, {})
             rule = SmbSharePolicyRule(
                 principal=module.params["principal"],
-                change=module.params["change"],
-                read=module.params["read"],
-                full_control=module.params["full_control"],
+                **{level: value for level, value in perms.items() if value},
             )
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
@@ -938,49 +1164,20 @@ def update_smb_share_policy(module, blade):
             current_policy_rule.status_code == 200
             and current_policy_rule.total_item_count == 0
         ):
+            perms = _share_rule_desired(module, {})
             rule = SmbSharePolicyRule(
                 principal=module.params["principal"],
-                change=module.params["change"],
-                read=module.params["read"],
-                full_control=module.params["full_control"],
+                **{level: value for level, value in perms.items() if value},
             )
             changed = True
             if not module.check_mode:
-                if module.params["before_rule"]:
-                    before_name = (
-                        module.params["name"] + "." + str(module.params["before_rule"])
-                    )
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.post_smb_share_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            before_rule_name=before_name,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.post_smb_share_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            before_rule_name=before_name,
-                        )
-                else:
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.post_smb_share_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.post_smb_share_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                        )
+                # Share rules are unordered; the SDK has no before_rule_name
+                # for them.
+                res = blade.post_smb_share_policies_rules(
+                    policy_names=[module.params["name"]],
+                    rule=rule,
+                    **_context_kwargs(module, versions),
+                )
                 if res.status_code != 200:
                     module.fail_json(
                         msg="Failed to create rule for principal {0} "
@@ -991,135 +1188,43 @@ def update_smb_share_policy(module, blade):
                         )
                     )
         else:
-            rules = list(current_policy_rule.items)
-            old_policy_rule = rules[0]
-            current_rule = {
-                "principal": sorted(old_policy_rule.principal),
-                "read": sorted(old_policy_rule.read),
-                "change": sorted(old_policy_rule.change),
-                "full_control": sorted(old_policy_rule.full_control),
+            old_policy_rule = list(current_policy_rule.items)[0]
+            # The array reports a rule as its ladder of granted levels (see
+            # _share_rule_perms), so both sides are normalised: the task's
+            # full_control=deny next to read/change=allow equals the None the
+            # array stores for "not granted". The principal is not compared;
+            # the filter above matched it (case-insensitively) and PATCH
+            # cannot change it.
+            live_perms = {
+                level: getattr(old_policy_rule, level) for level in _SHARE_LEVELS
             }
-            if module.params["read"]:
-                if module.params["read"] == "":
-                    new_read = ""
-                else:
-                    new_read = module.params["read"]
-            else:
-                new_read = current_rule["read"]
-            if module.params["full_control"]:
-                if module.params["full_control"] == "":
-                    new_full_control = ""
-                else:
-                    new_full_control = module.params["full_control"]
-            else:
-                new_full_control = current_rule["full_control"]
-            if module.params["change"]:
-                if module.params["change"] == "":
-                    new_change = ""
-                else:
-                    new_change = module.params["change"]
-            else:
-                new_change = current_rule["change"]
-            if module.params["principal"]:
-                new_principal = module.params["principal"]
-            else:
-                new_principal = current_rule["principal"]
-            new_rule = {
-                "principal": new_principal,
-                "read": new_read,
-                "change": new_change,
-                "full_control": new_full_control,
-            }
-            if current_rule != new_rule:
+            current_perms = _share_rule_perms(live_perms, {})
+            new_perms = _share_rule_desired(module, live_perms)
+            if new_perms != current_perms:
                 changed = True
                 if not module.check_mode:
-                    # Preserve fields the task did not specify by falling back to
-                    # the existing rule. Use the raw string values - new_rule holds
-                    # sorted() values that are only valid for the comparison above.
+                    # PATCH smb-share-policies/rules rejects `principal`
+                    # ("Invalid body parameter: principal") and bodies that
+                    # mix allow and deny, so send the single field that moves
+                    # the ladder (see _share_rule_patch).
                     rule = SmbSharePolicyRule(
-                        principal=(
-                            module.params["principal"]
-                            if module.params["principal"]
-                            else old_policy_rule.principal
-                        ),
-                        change=(
-                            module.params["change"]
-                            if module.params["change"]
-                            else old_policy_rule.change
-                        ),
-                        read=(
-                            module.params["read"]
-                            if module.params["read"]
-                            else old_policy_rule.read
-                        ),
-                        full_control=(
-                            module.params["full_control"]
-                            if module.params["full_control"]
-                            else old_policy_rule.full_control
-                        ),
+                        **_share_rule_patch(current_perms, new_perms)
                     )
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.patch_smb_share_policies_rules(
-                            names=[
-                                module.params["name"] + "." + str(old_policy_rule.index)
-                            ],
-                            rule=rule,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.patch_smb_share_policies_rules(
-                            names=[
-                                module.params["name"] + "." + str(old_policy_rule.index)
-                            ],
-                            rule=rule,
-                        )
+                    # Share rules are unordered and carry no index: the rule
+                    # is named after its principal, which is only unique
+                    # within the policy, so address it by name and policy.
+                    res = blade.patch_smb_share_policies_rules(
+                        policy_names=[module.params["name"]],
+                        names=[old_policy_rule.name],
+                        rule=rule,
+                        **_context_kwargs(module, versions),
+                    )
                     if res.status_code != 200:
                         module.fail_json(
-                            msg="Failed to update SMB share rule {0}. Error: {1}".format(
-                                module.params["name"]
-                                + "."
-                                + str(old_policy_rule.index),
-                                get_error_message(res),
-                            )
-                        )
-            if (
-                module.params["before_rule"]
-                and module.params["before_rule"] != old_policy_rule.index
-            ):
-                changed = True
-                if not module.check_mode:
-                    before_name = (
-                        module.params["name"] + "." + str(module.params["before_rule"])
-                    )
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.patch_smb_share_policies_rules(
-                            names=[
-                                module.params["name"] + "." + str(old_policy_rule.index)
-                            ],
-                            rule=SmbSharePolicyRule(),
-                            before_rule_name=before_name,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.patch_smb_share_policies_rules(
-                            names=[
-                                module.params["name"] + "." + str(old_policy_rule.index)
-                            ],
-                            rule=SmbSharePolicyRule(),
-                            before_rule_name=before_name,
-                        )
-                    if res.status_code != 200:
-                        module.fail_json(
-                            msg="Failed to move SMB share rule {0}. Error: {1}".format(
-                                module.params["name"]
-                                + "."
-                                + str(old_policy_rule.index),
+                            msg="Failed to update SMB share rule {0} in policy {1}. "
+                            "Error: {2}".format(
+                                old_policy_rule.name,
+                                module.params["name"],
                                 get_error_message(res),
                             )
                         )
@@ -1128,8 +1233,9 @@ def update_smb_share_policy(module, blade):
         and module.params["context"]
     ):
         current_policy = list(
-            blade.get_smb_share_policies(names=[module.params["name"]]).items,
-            context_names=[module.params["context"]],
+            blade.get_smb_share_policies(
+                names=[module.params["name"]], context_names=[module.params["context"]]
+            ).items
         )[0]
     else:
         current_policy = list(
@@ -1349,19 +1455,7 @@ def create_smb_client_policy(module, blade):
         if not module.params["client"]:
             module.fail_json(msg="client is required to create a new rule")
         else:
-            if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                rule = SmbClientPolicyRule(
-                    client=module.params["client"],
-                    permission=module.params["permission"],
-                    access=module.params["access"],
-                    encryption=module.params["smb_encryption"],
-                )
-            else:
-                rule = SmbClientPolicyRule(
-                    client=module.params["client"],
-                    access=module.params["access"],
-                    permission=module.params["permission"],
-                )
+            rule = _smb_client_rule_from_params(module, versions)
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                 and module.params["context"]
@@ -1387,85 +1481,19 @@ def create_smb_client_policy(module, blade):
 
 
 def create_network_access_policy(module, blade):
-    """Create Network Access Policy"""
-    changed = True
-    versions = get_rest_api_version(blade)
-    if not module.check_mode:
-        if (
-            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-            and module.params["context"]
-        ):
-            res = blade.post_network_access_policies(
-                names=[module.params["name"]], context_names=[module.params["context"]]
-            )
-        else:
-            res = blade.post_network_access_policies(names=[module.params["name"]])
-        if res.status_code != 200:
-            module.fail_json(
-                msg="Failed to create network access policy {0}.Error: {1}".format(
-                    module.params["name"], get_error_message(res)
-                )
-            )
-        if not module.params["enabled"]:
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                and module.params["context"]
-            ):
-                res = blade.patch_network_access_policies(
-                    policy=SmbClientPolicy(enabled=False),
-                    names=[module.params["name"]],
-                    context_names=[module.params["context"]],
-                )
-            else:
-                res = blade.patch_network_access_policies(
-                    policy=SmbClientPolicy(enabled=False), names=[module.params["name"]]
-                )
-            if res.status_code != 200:
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                    and module.params["context"]
-                ):
-                    blade.delete_network_access_policies(
-                        names=[module.params["name"]],
-                        context_names=[module.params["context"]],
-                    )
-                else:
-                    blade.delete_network_access_policies(names=[module.params["name"]])
-                module.fail_json(
-                    msg="Failed to create network access policy {0}.Error: {1}".format(
-                        module.params["name"], get_error_message(res)
-                    )
-                )
-        if not module.params["client"]:
-            module.fail_json(msg="client is required to create a new rule")
-        else:
-            rule = NetworkAccessPolicyRule(
-                client=module.params["client"],
-                effect=module.params["effect"],
-                interfaces=module.params["interfaces"],
-            )
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                and module.params["context"]
-            ):
-                res = blade.post_network_access_policies_rules(
-                    policy_names=[module.params["name"]],
-                    rule=rule,
-                    context_names=[module.params["context"]],
-                )
-            else:
-                res = blade.post_network_access_policies_rules(
-                    policy_names=[module.params["name"]],
-                    rule=rule,
-                )
-            if res.status_code != 200:
-                module.fail_json(
-                    msg="Failed to rule for policy {0}. Error: {1}".format(
-                        module.params["name"],
-                        get_error_message(res),
-                    )
-                )
-    module.exit_json(changed=changed)
+    """Create Network Access Policy
+
+    The FlashBlade REST API has no POST for network-access-policies (only the
+    rules endpoint can be posted to), so a named policy can never be created.
+    Fail clearly instead of raising an AttributeError from the SDK.
+    """
+    module.fail_json(
+        msg="Network access policy {0} does not exist and network access "
+        "policies cannot be created. Only the rules of an existing policy "
+        "(normally default-network-access-policy) can be managed.".format(
+            module.params["name"]
+        )
+    )
 
 
 def create_worm_data_policy(module, blade):
@@ -1551,19 +1579,7 @@ def update_smb_client_policy(module, blade):
             current_policy_rule.status_code != 200
             or current_policy_rule.total_item_count == 0
         ):
-            if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                rule = SmbClientPolicyRule(
-                    client=module.params["client"],
-                    permission=module.params["permission"],
-                    access=module.params["access"],
-                    encryption=module.params["smb_encryption"],
-                )
-            else:
-                rule = SmbClientPolicyRule(
-                    client=module.params["client"],
-                    permission=module.params["permission"],
-                    access=module.params["access"],
-                )
+            rule = _smb_client_rule_from_params(module, versions)
             changed = True
             if not module.check_mode:
                 if module.params["before_rule"]:
@@ -1619,19 +1635,7 @@ def update_smb_client_policy(module, blade):
                     if cli.client == "*":
                         cli_count = cli
                 if not cli_count:
-                    if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                        rule = SmbClientPolicyRule(
-                            client=module.params["client"],
-                            permission=module.params["permission"],
-                            access=module.params["access"],
-                            encryption=module.params["smb_encryption"],
-                        )
-                    else:
-                        rule = SmbClientPolicyRule(
-                            client=module.params["client"],
-                            permission=module.params["permission"],
-                            access=module.params["access"],
-                        )
+                    rule = _smb_client_rule_from_params(module, versions)
                     done = True
                     changed = True
                     if not module.check_mode:
@@ -1688,70 +1692,37 @@ def update_smb_client_policy(module, blade):
                             )
             if not done:
                 old_policy_rule = rules[0]
+                # Fields the task did not set keep their current value.
+                current_rule = {
+                    "client": old_policy_rule.client,
+                    "permission": old_policy_rule.permission,
+                }
+                new_rule = {
+                    "client": module.params["client"],
+                    "permission": _default(
+                        module.params["permission"], current_rule["permission"]
+                    ),
+                }
                 if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                    current_rule = {
-                        "client": sorted(old_policy_rule.client),
-                        "permission": sorted(old_policy_rule.permission),
-                        "encryption": old_policy_rule.encryption,
-                    }
-                else:
-                    current_rule = {
-                        "client": sorted(old_policy_rule.client),
-                        "permission": sorted(old_policy_rule.permission),
-                    }
-                if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                    if module.params["smb_encryption"]:
-                        new_encryption = module.params["smb_encryption"]
-                    else:
-                        new_encryption = current_rule["encryption"]
-                if module.params["permission"]:
-                    new_permission = sorted(module.params["permission"])
-                else:
-                    new_permission = sorted(current_rule["permission"])
-                if module.params["client"]:
-                    new_client = sorted(module.params["client"])
-                else:
-                    new_client = sorted(current_rule["client"])
-                if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
-                    new_rule = {
-                        "client": new_client,
-                        "permission": new_permission,
-                        "encryption": new_encryption,
-                    }
-                else:
-                    new_rule = {
-                        "client": new_client,
-                        "permission": new_permission,
-                    }
+                    current_rule["encryption"] = old_policy_rule.encryption
+                    new_rule["encryption"] = _default(
+                        module.params["smb_encryption"], current_rule["encryption"]
+                    )
                 if current_rule != new_rule:
                     changed = True
                     if not module.check_mode:
-                        # Preserve fields the task did not specify by falling back
-                        # to the existing rule. Use the raw string values for
-                        # client/permission - new_rule holds sorted() values that
-                        # are only valid for the comparison above, not for the SDK.
-                        rule_client = (
-                            module.params["client"]
-                            if module.params["client"]
-                            else old_policy_rule.client
-                        )
-                        rule_permission = (
-                            module.params["permission"]
-                            if module.params["permission"]
-                            else old_policy_rule.permission
-                        )
                         if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(
                             versions
                         ):
                             rule = SmbClientPolicyRule(
-                                client=rule_client,
-                                permission=rule_permission,
+                                client=new_rule["client"],
+                                permission=new_rule["permission"],
                                 encryption=new_rule["encryption"],
                             )
                         else:
                             rule = SmbClientPolicyRule(
-                                client=rule_client,
-                                permission=rule_permission,
+                                client=new_rule["client"],
+                                permission=new_rule["permission"],
                             )
                         if (
                             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
@@ -1971,76 +1942,47 @@ def delete_nfs_policy(module, blade):
     module.exit_json(changed=changed)
 
 
+def _network_rules_for_client(blade, module):
+    """Return the rules of the network access policy that match I(client).
+
+    The filter is applied client-side as well: a client of ``*`` is a
+    wildcard to the REST filter and would otherwise match every rule.
+    """
+    res = blade.get_network_access_policies_rules(
+        policy_names=[module.params["name"]],
+        filter="client='" + module.params["client"] + "'",
+    )
+    if res.status_code != 200:
+        return []
+    return [rule for rule in list(res.items) if rule.client == module.params["client"]]
+
+
 def update_network_access_policy(module, blade):
-    """Update Networkk Access Policy Rule"""
+    """Update Network Access Policy Rule
+
+    The network-access-policies endpoints take no fleet context, so no
+    context_names is passed here.
+    """
 
     changed = False
-    versions = get_rest_api_version(blade)
     if module.params["client"]:
-        if (
-            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-            and module.params["context"]
-        ):
-            current_policy_rule = blade.get_network_access_policies_rules(
-                policy_names=[module.params["name"]],
-                filter="client='" + module.params["client"] + "'",
-                context_names=[module.params["context"]],
-            )
-        else:
-            current_policy_rule = blade.get_network_access_policies_rules(
-                policy_names=[module.params["name"]],
-                filter="client='" + module.params["client"] + "'",
-            )
-        # If the rule lookup fails or returns nothing then no rule exists for
-        # this client yet - some Purity//FB versions return an error rather
-        # than an empty result set - so create it. Otherwise reconcile the
-        # existing rule.
-        if (
-            current_policy_rule.status_code != 200
-            or current_policy_rule.total_item_count == 0
-        ):
+        existing_rules = _network_rules_for_client(blade, module)
+        if not existing_rules:
             rule = NetworkAccessPolicyRule(
                 client=module.params["client"],
-                effect=module.params["effect"],
+                effect=_default(module.params["effect"], "allow"),
                 interfaces=module.params["interfaces"],
             )
             changed = True
             if not module.check_mode:
+                post_kwargs = {}
                 if module.params["before_rule"]:
-                    before_name = (
+                    post_kwargs["before_rule_name"] = (
                         module.params["name"] + "." + str(module.params["before_rule"])
                     )
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.post_network_access_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            before_rule_name=before_name,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.post_network_access_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            before_rule_name=before_name,
-                        )
-                else:
-                    if (
-                        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                        and module.params["context"]
-                    ):
-                        res = blade.post_network_access_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                            context_names=[module.params["context"]],
-                        )
-                    else:
-                        res = blade.post_network_access_policies_rules(
-                            policy_names=[module.params["name"]],
-                            rule=rule,
-                        )
+                res = blade.post_network_access_policies_rules(
+                    policy_names=[module.params["name"]], rule=rule, **post_kwargs
+                )
                 if res.status_code != 200:
                     module.fail_json(
                         msg="Failed to create rule for client {0} "
@@ -2051,328 +1993,100 @@ def update_network_access_policy(module, blade):
                         )
                     )
         else:
-            rules = list(current_policy_rule.items)
-            cli_count = None
-            done = False
-            if module.params["client"] == "*":
-                for cli in rules:
-                    if cli.client == "*":
-                        cli_count = cli
-                if not cli_count:
+            old_policy_rule = existing_rules[0]
+            rule_name = module.params["name"] + "." + str(old_policy_rule.index)
+            # Fields the task did not set keep their current value. Interface
+            # lists are compared order-insensitively.
+            current_rule = {
+                "effect": old_policy_rule.effect,
+                "interfaces": sorted(old_policy_rule.interfaces or []),
+            }
+            new_rule = {
+                "effect": _default(module.params["effect"], current_rule["effect"]),
+                "interfaces": (
+                    sorted(module.params["interfaces"])
+                    if module.params["interfaces"]
+                    else current_rule["interfaces"]
+                ),
+            }
+            if current_rule != new_rule:
+                changed = True
+                if not module.check_mode:
                     rule = NetworkAccessPolicyRule(
                         client=module.params["client"],
-                        effect=module.params["effect"],
-                        interfaces=module.params["interfaces"],
+                        effect=new_rule["effect"],
+                        interfaces=new_rule["interfaces"],
                     )
-                    done = True
-                    changed = True
-                    if not module.check_mode:
-                        if module.params["before_rule"]:
-                            if (
-                                LooseVersion(CONTEXT_API_VERSION)
-                                <= LooseVersion(versions)
-                                and module.params["context"]
-                            ):
-                                res = blade.post_network_access_policies_rules(
-                                    policy_names=[module.params["name"]],
-                                    rule=rule,
-                                    before_rule_name=(
-                                        module.params["name"]
-                                        + "."
-                                        + str(module.params["before_rule"]),
-                                    ),
-                                    context_names=[module.params["context"]],
-                                )
-                            else:
-                                res = blade.post_network_access_policies_rules(
-                                    policy_names=[module.params["name"]],
-                                    rule=rule,
-                                    before_rule_name=(
-                                        module.params["name"]
-                                        + "."
-                                        + str(module.params["before_rule"]),
-                                    ),
-                                )
-                        else:
-                            if (
-                                LooseVersion(CONTEXT_API_VERSION)
-                                <= LooseVersion(versions)
-                                and module.params["context"]
-                            ):
-                                res = blade.post_network_access_policies_rules(
-                                    policy_names=[module.params["name"]],
-                                    rule=rule,
-                                    context_names=[module.params["context"]],
-                                )
-                            else:
-                                res = blade.post_network_access_policies_rules(
-                                    policy_names=[module.params["name"]],
-                                    rule=rule,
-                                )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to create rule for "
-                                "client {0} in policy {1}. Error: {2}".format(
-                                    module.params["client"],
-                                    module.params["name"],
-                                    get_error_message(res),
-                                )
-                            )
-            if not done:
-                old_policy_rule = rules[0]
-                current_rule = {
-                    "client": sorted(old_policy_rule.client),
-                    "effect": old_policy_rule.effect,
-                    "interfaces": old_policy_rule.interfaces,
-                }
-                if module.params["interfaces"]:
-                    new_interfaces = module.params["interfaces"]
-                else:
-                    new_interfaces = current_rule["interfaces"]
-                if module.params["effect"]:
-                    new_effect = module.params["effect"]
-                else:
-                    new_effect = current_rule["effect"]
-                if module.params["client"]:
-                    new_client = sorted(module.params["client"])
-                else:
-                    new_client = sorted(current_rule["client"])
-                new_rule = {
-                    "client": new_client,
-                    "effect": new_effect,
-                    "interfaces": new_interfaces,
-                }
-                if current_rule != new_rule:
-                    changed = True
-                    if not module.check_mode:
-                        # Preserve fields the task did not specify by falling back
-                        # to the existing rule. Use the raw string value for client
-                        # - new_rule holds sorted() values that are only valid for
-                        # the comparison above, not for the SDK.
-                        rule = NetworkAccessPolicyRule(
-                            client=(
-                                module.params["client"]
-                                if module.params["client"]
-                                else old_policy_rule.client
-                            ),
-                            effect=new_rule["effect"],
-                            interfaces=new_rule["interfaces"],
+                    res = blade.patch_network_access_policies_rules(
+                        names=[rule_name], rule=rule
+                    )
+                    if res.status_code != 200:
+                        module.fail_json(
+                            msg="Failed to update network access client rule {0}. "
+                            "Error: {1}".format(rule_name, get_error_message(res))
                         )
-                        if (
-                            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                            and module.params["context"]
-                        ):
-                            res = blade.patch_network_access_policies_rules(
-                                names=[
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index)
-                                ],
-                                rule=rule,
-                                context_names=[module.params["context"]],
-                            )
-                        else:
-                            res = blade.patch_network_access_policies_rules(
-                                names=[
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index)
-                                ],
-                                rule=rule,
-                            )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to update network access client rule {0}. Error: {1}".format(
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index),
-                                    get_error_message(res),
-                                )
-                            )
-                if (
-                    module.params["before_rule"]
-                    and module.params["before_rule"] != old_policy_rule.index
-                ):
-                    changed = True
-                    if not module.check_mode:
-                        before_name = (
-                            module.params["name"]
-                            + "."
-                            + str(module.params["before_rule"])
+            if (
+                module.params["before_rule"]
+                and module.params["before_rule"] != old_policy_rule.index
+            ):
+                changed = True
+                if not module.check_mode:
+                    before_name = (
+                        module.params["name"] + "." + str(module.params["before_rule"])
+                    )
+                    res = blade.patch_network_access_policies_rules(
+                        names=[rule_name],
+                        rule=NetworkAccessPolicyRule(),
+                        before_rule_name=before_name,
+                    )
+                    if res.status_code != 200:
+                        module.fail_json(
+                            msg="Failed to move network access client rule {0}. "
+                            "Error: {1}".format(rule_name, get_error_message(res))
                         )
-                        if (
-                            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                            and module.params["context"]
-                        ):
-                            res = blade.patch_network_access_policies_rules(
-                                names=[
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index)
-                                ],
-                                rule=NetworkAccessPolicyRule(),
-                                before_rule_name=before_name,
-                                context_names=[module.params["context"]],
-                            )
-                        else:
-                            res = blade.patch_network_access_policies_rules(
-                                names=[
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index)
-                                ],
-                                rule=NetworkAccessPolicyRule(),
-                                before_rule_name=before_name,
-                            )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to move network access client rule {0}. Error: {1}".format(
-                                    module.params["name"]
-                                    + "."
-                                    + str(old_policy_rule.index),
-                                    get_error_message(res),
-                                )
-                            )
-    if (
-        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-        and module.params["context"]
-    ):
-        current_policy = list(
-            blade.get_network_access_policies(
-                names=[module.params["name"]], context_names=[module.params["context"]]
-            ).items
-        )[0]
-    else:
-        current_policy = list(
-            blade.get_network_access_policies(names=[module.params["name"]]).items
-        )[0]
+    current_policy = list(
+        blade.get_network_access_policies(names=[module.params["name"]]).items
+    )[0]
     if current_policy.enabled != module.params["enabled"]:
         changed = True
         if not module.check_mode:
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                and module.params["context"]
-            ):
-                res = blade.patch_network_access_policies(
-                    policy=NetworkAccessPolicy(enabled=module.params["enabled"]),
-                    names=[module.params["name"]],
-                    context_names=[module.params["context"]],
-                )
-            else:
-                res = blade.patch_network_access_policies(
-                    policy=NetworkAccessPolicy(enabled=module.params["enabled"]),
-                    names=[module.params["name"]],
-                )
+            res = blade.patch_network_access_policies(
+                policy=NetworkAccessPolicy(enabled=module.params["enabled"]),
+                names=[module.params["name"]],
+            )
             if res.status_code != 200:
                 module.fail_json(
-                    msg="Failed to change state of network access policy {0}.Error: {1}".format(
-                        module.params["name"], get_error_message(res)
-                    )
+                    msg="Failed to change state of network access policy {0}."
+                    "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
     module.exit_json(changed=changed)
 
 
 def delete_network_access_policy(module, blade):
-    """Delete Network Access Policy, or Rule
+    """Delete Network Access Policy Rule
 
-    If client is provided then delete the client rule if it exists.
+    If client is provided then delete the client rule if it exists. The REST
+    API has no DELETE for network-access-policies themselves, so a whole
+    policy delete is refused.
     """
 
     changed = False
-    versions = get_rest_api_version(blade)
-    policy_delete = True
-    if module.params["client"]:
-        policy_delete = False
-        if (
-            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-            and module.params["context"]
-        ):
-            res = blade.get_network_access_policies_rules(
-                policy_names=[module.params["name"]],
-                filter="client='" + module.params["client"] + "'",
-                context_names=[module.params["context"]],
-            )
-        else:
-            res = blade.get_network_access_policies_rules(
-                policy_names=[module.params["name"]],
-                filter="client='" + module.params["client"] + "'",
-            )
-        if res.status_code == 200:
-            if res.total_item_count == 0:
-                pass
-            elif res.total_item_count == 1:
-                rule = list(res.items)[0]
-                if module.params["client"] == rule.client:
-                    changed = True
-                    if not module.check_mode:
-                        if (
-                            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                            and module.params["context"]
-                        ):
-                            res = blade.delete_network_access_policies_rules(
-                                names=[rule.name],
-                                context_names=[module.params["context"]],
-                            )
-                        else:
-                            res = blade.delete_network_access_policies_rules(
-                                names=[rule.name]
-                            )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to delete rule for client {0} in policy {1}. "
-                                "Error: {2}".format(
-                                    module.params["client"],
-                                    module.params["name"],
-                                    get_error_message(res),
-                                )
-                            )
-            else:
-                rules = list(res.items)
-                for cli in rules:
-                    if cli.client == "*":
-                        changed = True
-                        if not module.check_mode:
-                            if (
-                                LooseVersion(CONTEXT_API_VERSION)
-                                <= LooseVersion(versions)
-                                and module.params["context"]
-                            ):
-                                res = blade.delete_network_access_policies_rules(
-                                    names=[cli.name],
-                                    context_names=[module.params["context"]],
-                                )
-                            else:
-                                res = blade.delete_network_access_policies_rules(
-                                    names=[cli.name]
-                                )
-                            if res.status_code != 200:
-                                module.fail_json(
-                                    msg="Failed to delete rule for client {0} in policy {1}. "
-                                    "Error: {2}".format(
-                                        module.params["client"],
-                                        module.params["name"],
-                                        get_error_message(res),
-                                    )
-                                )
-    if policy_delete:
+    if not module.params["client"]:
+        module.fail_json(
+            msg="Network access policies cannot be deleted. Specify `client` "
+            "to delete a rule from policy {0}.".format(module.params["name"])
+        )
+    for rule in _network_rules_for_client(blade, module):
         changed = True
         if not module.check_mode:
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                and module.params["context"]
-            ):
-                res = blade.delete_network_Access_policies(
-                    names=[module.params["name"]],
-                    context_names=[module.params["context"]],
-                )
-            else:
-                res = blade.delete_network_Access_policies(
-                    names=[module.params["name"]]
-                )
+            res = blade.delete_network_access_policies_rules(names=[rule.name])
             if res.status_code != 200:
                 module.fail_json(
-                    msg="Failed to delete network access policy {0}. Error: {1}".format(
-                        module.params["name"], get_error_message(res)
+                    msg="Failed to delete rule for client {0} in policy {1}. "
+                    "Error: {2}".format(
+                        module.params["client"],
+                        module.params["name"],
+                        get_error_message(res),
                     )
                 )
     module.exit_json(changed=changed)
@@ -2414,22 +2128,11 @@ def rename_network_access_policy(module, blade):
     """Rename Network Access Policy"""
 
     changed = True
-    versions = get_rest_api_version(blade)
     if not module.check_mode:
-        if (
-            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-            and module.params["context"]
-        ):
-            res = blade.patch_network_access_policies(
-                names=[module.params["name"]],
-                policy=NfsExportPolicy(name=module.params["rename"]),
-                context_names=[module.params["context"]],
-            )
-        else:
-            res = blade.patch_network_access_policies(
-                names=[module.params["name"]],
-                policy=NfsExportPolicy(name=module.params["rename"]),
-            )
+        res = blade.patch_network_access_policies(
+            names=[module.params["name"]],
+            policy=NetworkAccessPolicy(name=module.params["rename"]),
+        )
         if res.status_code != 200:
             module.fail_json(
                 msg="Failed to rename network access policy {0} to {1}. Error: {2}".format(
@@ -2596,17 +2299,7 @@ def update_nfs_policy(module, blade):
             current_policy_rule.status_code != 200
             or current_policy_rule.total_item_count == 0
         ):
-            rule = NfsExportPolicyRule(
-                client=module.params["client"],
-                permission=module.params["permission"],
-                access=module.params["access"],
-                anonuid=module.params["anonuid"],
-                anongid=module.params["anongid"],
-                fileid_32bit=module.params["fileid_32bit"],
-                atime=module.params["atime"],
-                secure=module.params["secure"],
-                security=module.params["security"],
-            )
+            rule = _nfs_rule_from_params(module, versions)
             changed = True
             if not module.check_mode:
                 if module.params["before_rule"]:
@@ -2662,17 +2355,7 @@ def update_nfs_policy(module, blade):
                     if cli.client == "*":
                         cli_count = cli
                 if not cli_count:
-                    rule = NfsExportPolicyRule(
-                        client=module.params["client"],
-                        permission=module.params["permission"],
-                        access=module.params["access"],
-                        anonuid=module.params["anonuid"],
-                        anongid=module.params["anongid"],
-                        fileid_32bit=module.params["fileid_32bit"],
-                        atime=module.params["atime"],
-                        secure=module.params["secure"],
-                        security=module.params["security"],
-                    )
+                    rule = _nfs_rule_from_params(module, versions)
                     done = True
                     changed = True
                     if not module.check_mode:
@@ -2729,94 +2412,48 @@ def update_nfs_policy(module, blade):
                             )
             if not done:
                 old_policy_rule = rules[0]
+                # Fields the task did not set keep their current value. The
+                # anon ids are normalised to int (REST 2.21 reports strings,
+                # the SDK models from 2.22 only accept integers) and security
+                # is compared order-insensitively.
                 current_rule = {
                     "access": getattr(old_policy_rule, "access", None),
-                    "anongid": getattr(old_policy_rule, "anongid", None),
-                    "anonuid": getattr(old_policy_rule, "anonuid", None),
+                    "anongid": _anon_id(getattr(old_policy_rule, "anongid", None)),
+                    "anonuid": _anon_id(getattr(old_policy_rule, "anonuid", None)),
                     "atime": old_policy_rule.atime,
-                    "client": sorted(old_policy_rule.client),
+                    "client": old_policy_rule.client,
                     "fileid_32bit": old_policy_rule.fileid_32bit,
-                    "permission": sorted(old_policy_rule.permission),
+                    "permission": old_policy_rule.permission,
                     "secure": old_policy_rule.secure,
-                    "security": sorted(old_policy_rule.security),
+                    "security": sorted(old_policy_rule.security or []),
                 }
-                if module.params["permission"]:
-                    new_permission = sorted(module.params["permission"])
-                else:
-                    new_permission = sorted(current_rule["permission"])
-                if module.params["client"]:
-                    new_client = sorted(module.params["client"])
-                else:
-                    new_client = sorted(current_rule["client"])
-                if module.params["security"]:
-                    new_security = sorted(module.params["security"])
-                else:
-                    new_security = sorted(current_rule["security"])
-                if module.params["anongid"]:
-                    new_anongid = module.params["anongid"]
-                else:
-                    new_anongid = current_rule["anongid"]
-                if module.params["anonuid"]:
-                    new_anonuid = module.params["anonuid"]
-                else:
-                    new_anonuid = current_rule["anonuid"]
-                if module.params["atime"] != current_rule["atime"]:
-                    new_atime = module.params["atime"]
-                else:
-                    new_atime = current_rule["atime"]
-                if module.params["secure"] != current_rule["secure"]:
-                    new_secure = module.params["secure"]
-                else:
-                    new_secure = current_rule["secure"]
-                if module.params["fileid_32bit"] != current_rule["fileid_32bit"]:
-                    new_fileid_32bit = module.params["fileid_32bit"]
-                else:
-                    new_fileid_32bit = current_rule["fileid_32bit"]
-                if module.params["access"]:
-                    new_access = module.params["access"]
-                else:
-                    new_access = current_rule["access"]
                 new_rule = {
-                    "access": new_access,
-                    "anongid": new_anongid,
-                    "anonuid": new_anonuid,
-                    "atime": new_atime,
-                    "client": new_client,
-                    "fileid_32bit": new_fileid_32bit,
-                    "permission": new_permission,
-                    "secure": new_secure,
-                    "security": new_security,
+                    "access": _default(module.params["access"], current_rule["access"]),
+                    "anongid": _default(
+                        _anon_id(module.params["anongid"]), current_rule["anongid"]
+                    ),
+                    "anonuid": _default(
+                        _anon_id(module.params["anonuid"]), current_rule["anonuid"]
+                    ),
+                    "atime": _default(module.params["atime"], current_rule["atime"]),
+                    "client": module.params["client"],
+                    "fileid_32bit": _default(
+                        module.params["fileid_32bit"], current_rule["fileid_32bit"]
+                    ),
+                    "permission": _default(
+                        module.params["permission"], current_rule["permission"]
+                    ),
+                    "secure": _default(module.params["secure"], current_rule["secure"]),
+                    "security": (
+                        sorted(module.params["security"])
+                        if module.params["security"]
+                        else current_rule["security"]
+                    ),
                 }
                 if current_rule != new_rule:
                     changed = True
                     if not module.check_mode:
-                        # Preserve fields the task did not specify by falling back
-                        # to the existing rule. Use the raw string values for
-                        # client/permission - new_rule holds sorted() values that
-                        # are only valid for the comparison above, not for the SDK.
-                        rule = NfsExportPolicyRule(
-                            client=(
-                                module.params["client"]
-                                if module.params["client"]
-                                else old_policy_rule.client
-                            ),
-                            permission=(
-                                module.params["permission"]
-                                if module.params["permission"]
-                                else old_policy_rule.permission
-                            ),
-                            access=new_rule["access"],
-                            anonuid=new_rule["anonuid"],
-                            anongid=new_rule["anongid"],
-                            fileid_32bit=new_rule["fileid_32bit"],
-                            atime=new_rule["atime"],
-                            secure=new_rule["secure"],
-                            security=(
-                                module.params["security"]
-                                if module.params["security"]
-                                else old_policy_rule.security
-                            ),
-                        )
+                        rule = _nfs_rule(versions, **new_rule)
                         if (
                             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                             and module.params["context"]
@@ -2869,7 +2506,7 @@ def update_nfs_policy(module, blade):
                                     + "."
                                     + str(old_policy_rule.index)
                                 ],
-                                rule=NfsExportPolicyRule(),
+                                rule=_nfs_rule(versions),
                                 before_rule_name=before_name,
                                 context_names=[module.params["context"]],
                             )
@@ -2880,7 +2517,7 @@ def update_nfs_policy(module, blade):
                                     + "."
                                     + str(old_policy_rule.index)
                                 ],
-                                rule=NfsExportPolicyRule(),
+                                rule=_nfs_rule(versions),
                                 before_rule_name=before_name,
                             )
                         if res.status_code != 200:
@@ -2982,17 +2619,7 @@ def create_nfs_policy(module, blade):
                     )
                 )
         if module.params["client"]:
-            rule = NfsExportPolicyRule(
-                client=module.params["client"],
-                permission=module.params["permission"],
-                access=module.params["access"],
-                anonuid=module.params["anonuid"],
-                anongid=module.params["anongid"],
-                fileid_32bit=module.params["fileid_32bit"],
-                atime=module.params["atime"],
-                secure=module.params["secure"],
-                security=module.params["security"],
-            )
+            rule = _nfs_rule_from_params(module, versions)
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                 and module.params["context"]
@@ -3240,7 +2867,7 @@ def create_os_policy(module, blade):
                     actions=module.params["actions"],
                     resources=module.params["object_resources"],
                     conditions=conditions,
-                    effect=module.params["effect"],
+                    effect=_default(module.params["effect"], "allow"),
                 )
             else:
                 rule = PolicyRuleObjectAccessPost(
@@ -3323,11 +2950,14 @@ def update_os_policy(module, blade):
                     s3_delimiters=module.params["s3_delimiters"],
                     s3_prefixes=module.params["s3_prefixes"],
                 )
-                rule = PolicyRuleObjectAccessPost(
-                    actions=module.params["actions"],
-                    resources=module.params["object_resources"],
-                    conditions=conditions,
-                )
+                rule_kwargs = {
+                    "actions": module.params["actions"],
+                    "resources": module.params["object_resources"],
+                    "conditions": conditions,
+                }
+                if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
+                    rule_kwargs["effect"] = _default(module.params["effect"], "allow")
+                rule = PolicyRuleObjectAccessPost(**rule_kwargs)
                 if (
                     LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                     and module.params["context"]
@@ -3354,47 +2984,35 @@ def update_os_policy(module, blade):
                     )
         else:
             old_policy_rule = list(current_policy_rule.items)[0]
+            # Lists are compared order-insensitively (the array may return
+            # them in any order) and fields the task did not set keep their
+            # current value, including the rule effect.
             current_rule = {
-                "actions": old_policy_rule.actions,
-                "resources": old_policy_rule.resources,
-                "ips": getattr(old_policy_rule.conditions, "source_ips", None),
-                "prefixes": getattr(old_policy_rule.conditions, "s3_prefixes", None),
-                "delimiters": getattr(
-                    old_policy_rule.conditions, "s3_delimiters", None
+                "actions": _sorted_or_none(old_policy_rule.actions),
+                "resources": _sorted_or_none(old_policy_rule.resources),
+                "ips": _sorted_or_none(
+                    getattr(old_policy_rule.conditions, "source_ips", None)
                 ),
+                "prefixes": _sorted_or_none(
+                    getattr(old_policy_rule.conditions, "s3_prefixes", None)
+                ),
+                "delimiters": _sorted_or_none(
+                    getattr(old_policy_rule.conditions, "s3_delimiters", None)
+                ),
+                "effect": getattr(old_policy_rule, "effect", None),
             }
-            if module.params["actions"]:
-                new_actions = sorted(module.params["actions"])
-            else:
-                new_actions = sorted(current_rule["actions"])
-            if module.params["object_resources"]:
-                new_resources = sorted(module.params["object_resources"])
-            else:
-                new_resources = sorted(current_rule["resources"])
-            if module.params["s3_prefixes"]:
-                new_prefixes = sorted(module.params["s3_prefixes"])
-            elif current_rule["prefixes"]:
-                new_prefixes = sorted(current_rule["prefixes"])
-            else:
-                new_prefixes = None
-            if module.params["s3_delimiters"]:
-                new_delimiters = sorted(module.params["s3_delimiters"])
-            elif current_rule["delimiters"]:
-                new_delimiters = sorted(current_rule["delimiters"])
-            else:
-                new_delimiters = None
-            if module.params["source_ips"]:
-                new_ips = sorted(module.params["source_ips"])
-            elif current_rule["ips"]:
-                new_ips = sorted(current_rule["ips"])
-            else:
-                new_ips = None
             new_rule = {
-                "actions": new_actions,
-                "resources": new_resources,
-                "ips": new_ips,
-                "prefixes": new_prefixes,
-                "delimiters": new_delimiters,
+                "actions": _sorted_or_none(module.params["actions"])
+                or current_rule["actions"],
+                "resources": _sorted_or_none(module.params["object_resources"])
+                or current_rule["resources"],
+                "ips": _sorted_or_none(module.params["source_ips"])
+                or current_rule["ips"],
+                "prefixes": _sorted_or_none(module.params["s3_prefixes"])
+                or current_rule["prefixes"],
+                "delimiters": _sorted_or_none(module.params["s3_delimiters"])
+                or current_rule["delimiters"],
+                "effect": _default(module.params["effect"], current_rule["effect"]),
             }
             if current_rule != new_rule:
                 changed = True
@@ -3404,11 +3022,17 @@ def update_os_policy(module, blade):
                         s3_prefixes=new_rule["prefixes"],
                         s3_delimiters=new_rule["delimiters"],
                     )
-                    rule = PolicyRuleObjectAccess(
-                        actions=new_rule["actions"],
-                        resources=new_rule["resources"],
-                        conditions=conditions,
-                    )
+                    rule_kwargs = {
+                        "actions": new_rule["actions"],
+                        "resources": new_rule["resources"],
+                        "conditions": conditions,
+                    }
+                    if new_rule["effect"] is not None:
+                        rule_kwargs["effect"] = new_rule["effect"]
+                    # PolicyRuleObjectAccess is the response model and drops
+                    # `effect` from the request body; the PATCH body model
+                    # (as the SDK itself types it) is PolicyRuleObjectAccessPost.
+                    rule = PolicyRuleObjectAccessPost(**rule_kwargs)
                     if (
                         LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                         and module.params["context"]
@@ -3530,11 +3154,15 @@ def copy_os_policy_rule(module, blade):
             s3_delimiters=current_rule.conditions.s3_delimiters,
             s3_prefixes=current_rule.conditions.s3_prefixes,
         )
-        rule = PolicyRuleObjectAccessPost(
-            actions=current_rule.actions,
-            resources=current_rule.resources,
-            conditions=conditions,
-        )
+        rule_kwargs = {
+            "actions": current_rule.actions,
+            "resources": current_rule.resources,
+            "conditions": conditions,
+        }
+        if getattr(current_rule, "effect", None) is not None:
+            # Keep a deny rule a deny rule when it is copied.
+            rule_kwargs["effect"] = current_rule.effect
+        rule = PolicyRuleObjectAccessPost(**rule_kwargs)
         if (
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
             and module.params["context"]
@@ -3884,135 +3512,115 @@ def update_snap_policy(module, blade):
         module.fail_json(msg="`timezone` requires `at` to be provided.")
     if module.params["at"] and not module.params["every"]:
         module.fail_json(msg="`at` requires `every` to be provided.")
-    if (
-        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-        and module.params["context"]
-    ):
-        current_rules = list(
-            blade.get_policies(
-                names=[module.params["name"]], context_names=[module.params["context"]]
-            ).items
-        )[0].rules
-    else:
-        current_rules = list(blade.get_policies(names=[module.params["name"]]).items)[
-            0
-        ].rules
-    create_new = False
-    # Snapshot policies carry a single schedule rule. Fall back to the existing
-    # rule's value for any field the task did not specify, so a partial update
-    # (e.g. changing only keep_for) does not reset the other fields to zero.
-    existing_rule = current_rules[0] if current_rules else None
-    if module.params["at"]:
-        new_at = time_to_milliseconds(module.params["at"])
-    elif existing_rule is not None:
-        new_at = existing_rule.at
-    else:
-        new_at = None
-    if module.params["keep_for"]:
-        new_keep_for = module.params["keep_for"]
-    elif existing_rule is not None:
-        new_keep_for = int(existing_rule.keep_for / 1000)
-    else:
-        new_keep_for = 0
-    if module.params["every"]:
-        new_every = module.params["every"]
-    elif existing_rule is not None:
-        new_every = int(existing_rule.every / 1000)
-    else:
-        new_every = 0
-    if module.params["timezone"]:
-        new_tz = module.params["timezone"]
-    elif existing_rule is not None:
-        new_tz = existing_rule.time_zone
-    else:
-        new_tz = None
-    for rule in current_rules:
-        current_rule = {
-            "at": rule.at,
-            "every": rule.every,
-            "keep_for": rule.keep_for,
-            "time_zone": rule.time_zone,
-        }
+    ctx = _context_kwargs(module, versions)
+    current_policy = list(
+        blade.get_policies(names=[module.params["name"]], **ctx).items
+    )[0]
+    current_rules = current_policy.rules or []
+    # Rules and the enabled state are only reconciled for state=present; a
+    # state=absent call reaches here to detach members and must not re-enable
+    # the policy through the default of `enabled`.
+    if module.params["state"] == "present":
+        # Snapshot policies carry a single schedule rule. Fall back to the
+        # existing rule's value for any field the task did not specify, so a
+        # partial update (e.g. changing only keep_for) does not reset the
+        # other fields to zero.
+        existing_rule = current_rules[0] if current_rules else None
+        if module.params["at"]:
+            new_at = time_to_milliseconds(module.params["at"])
+        elif existing_rule is not None:
+            new_at = existing_rule.at
+        else:
+            new_at = None
+        if module.params["keep_for"]:
+            new_keep_for = module.params["keep_for"]
+        elif existing_rule is not None:
+            new_keep_for = int(existing_rule.keep_for / 1000)
+        else:
+            new_keep_for = 0
+        if module.params["every"]:
+            new_every = module.params["every"]
+        elif existing_rule is not None:
+            new_every = int(existing_rule.every / 1000)
+        else:
+            new_every = 0
+        if module.params["timezone"]:
+            new_tz = module.params["timezone"]
+        elif existing_rule is not None:
+            new_tz = existing_rule.time_zone
+        else:
+            new_tz = None
         new_rule = {
             "at": new_at,
             "every": new_every * 1000,
             "keep_for": new_keep_for * 1000,
             "time_zone": new_tz,
         }
-        if current_rule != new_rule:
-            create_new = True
-
-    if create_new:
-        changed = True
-        if not module.check_mode:
-            # Build the new rule from the merged values above rather than the
-            # raw task parameters, so fields not set in the task keep their
-            # current value instead of being reset to zero.
-            if new_at is not None and new_every and new_every % 86400 != 0:
-                module.fail_json(
-                    msg="At time can only be set if every value is a multiple of 86400"
-                )
-            if new_at is not None and not new_tz:
-                new_tz = _get_local_tz(module)
-                if new_tz not in pytz.all_timezones_set:
-                    module.fail_json(msg="Timezone {0} is not valid".format(new_tz))
-            if new_keep_for < new_every:
-                module.fail_json(
-                    msg="Retention period cannot be less than snapshot interval."
-                )
-            if new_keep_for:
-                if not 300 <= new_keep_for <= 34560000:
-                    module.fail_json(
-                        msg="keep_for parameter is out of range (300 to 34560000)"
-                    )
-                if not 300 <= new_every <= 34560000:
-                    module.fail_json(
-                        msg="every parameter is out of range (300 to 34560000)"
-                    )
-                if new_at is not None:
+        # Only add the rule when no existing rule already matches it, so a
+        # second rule is not re-added on every run.
+        rule_exists = any(
+            {
+                "at": rule.at,
+                "every": rule.every,
+                "keep_for": rule.keep_for,
+                "time_zone": rule.time_zone,
+            }
+            == new_rule
+            for rule in current_rules
+        )
+        add_rule = bool(new_every or new_keep_for) and not rule_exists
+        # The enabled state is reconciled on its own, not only when a rule is
+        # added.
+        enable_change = current_policy.enabled != module.params["enabled"]
+        if add_rule or enable_change:
+            changed = True
+            if not module.check_mode:
+                if add_rule:
+                    if new_at is not None and new_every % 86400 != 0:
+                        module.fail_json(
+                            msg="At time can only be set if every value is a "
+                            "multiple of 86400"
+                        )
+                    if new_at is not None and not new_tz:
+                        new_tz = _get_local_tz(module)
+                        if new_tz not in pytz.all_timezones_set:
+                            module.fail_json(
+                                msg="Timezone {0} is not valid".format(new_tz)
+                            )
+                    if new_keep_for < new_every:
+                        module.fail_json(
+                            msg="Retention period cannot be less than snapshot interval."
+                        )
+                    if not 300 <= new_keep_for <= 34560000:
+                        module.fail_json(
+                            msg="keep_for parameter is out of range (300 to 34560000)"
+                        )
+                    if not 300 <= new_every <= 34560000:
+                        module.fail_json(
+                            msg="every parameter is out of range (300 to 34560000)"
+                        )
+                    rule_kwargs = {
+                        "keep_for": new_keep_for * 1000,
+                        "every": new_every * 1000,
+                    }
+                    if new_at is not None:
+                        rule_kwargs["at"] = new_at
+                        rule_kwargs["time_zone"] = new_tz
                     attr = SnapshotPolicyPatch(
                         enabled=module.params["enabled"],
-                        add_rules=[
-                            PolicyRule(
-                                keep_for=new_keep_for * 1000,
-                                every=new_every * 1000,
-                                at=new_at,
-                                time_zone=new_tz,
-                            )
-                        ],
+                        add_rules=[PolicyRule(**rule_kwargs)],
                     )
                 else:
-                    attr = SnapshotPolicyPatch(
-                        enabled=module.params["enabled"],
-                        add_rules=[
-                            PolicyRule(
-                                keep_for=new_keep_for * 1000,
-                                every=new_every * 1000,
-                            )
-                        ],
-                    )
-            else:
-                attr = SnapshotPolicyPatch(enabled=module.params["enabled"])
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                and module.params["context"]
-            ):
+                    attr = SnapshotPolicyPatch(enabled=module.params["enabled"])
                 res = blade.patch_policies(
-                    names=[module.params["name"]],
-                    policy=attr,
-                    context_names=[module.params["context"]],
+                    names=[module.params["name"]], policy=attr, **ctx
                 )
-            else:
-                res = blade.patch_policies(
-                    names=[module.params["name"]],
-                    policy=attr,
-                )
-            if res.status_code != 200:
-                module.fail_json(
-                    msg="Failed to update snapshot policy {0}. Error: {1}".format(
-                        module.params["name"], get_error_message(res)
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update snapshot policy {0}. Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
                     )
-                )
 
     if module.params["filesystem"]:
         current_filesystems = []
@@ -4196,6 +3804,192 @@ def update_snap_policy(module, blade):
     module.exit_json(changed=changed)
 
 
+def rename_snap_policy(module, blade):
+    """Rename snapshot policy"""
+
+    changed = True
+    versions = get_rest_api_version(blade)
+    if not module.check_mode:
+        # Policy keeps `name` in the request body (SnapshotPolicyPatch strips
+        # it as read-only), so this is the only way to ask for a rename.
+        res = blade.patch_policies(
+            names=[module.params["name"]],
+            policy=Policy(name=module.params["rename"]),
+            **_context_kwargs(module, versions),
+        )
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to rename snapshot policy {0} to {1}. Error: {2}".format(
+                    module.params["name"],
+                    module.params["rename"],
+                    get_error_message(res),
+                )
+            )
+        # Purity//FB (verified on 4.6.4, REST 2.21) answers 200 to a body of
+        # {"name": ...} on PATCH /policies but silently keeps the old name,
+        # whether addressed by names or ids: snapshot policies have no rename
+        # on the array. Check the result rather than report a rename that
+        # never happened.
+        res = blade.get_policies(
+            names=[module.params["rename"]], **_context_kwargs(module, versions)
+        )
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to rename snapshot policy {0} to {1}: the array "
+                "accepted the request but kept the old name. Purity//FB REST "
+                "{2} does not support renaming snapshot policies.".format(
+                    module.params["name"], module.params["rename"], versions
+                )
+            )
+    module.exit_json(changed=changed)
+
+
+def _copy_rule_policy(module, blade, source, versions, ctx):
+    """Create the target of a copy for NFS and SMB policies.
+
+    The target is created empty, disabled if the source is disabled, and then
+    every source rule is re-created on it in evaluation order. Returns the
+    last SDK response so the caller can report a failure.
+    """
+    policy_type = module.params["policy_type"]
+    target = module.params["target"]
+    if policy_type == "nfs":
+        poster = blade.post_nfs_export_policies
+        patcher = blade.patch_nfs_export_policies
+        rule_getter = blade.get_nfs_export_policies_rules
+        rule_poster = blade.post_nfs_export_policies_rules
+        policy_model = NfsExportPolicy
+    elif policy_type == "smb_client":
+        poster = blade.post_smb_client_policies
+        patcher = blade.patch_smb_client_policies
+        rule_getter = blade.get_smb_client_policies_rules
+        rule_poster = blade.post_smb_client_policies_rules
+        policy_model = SmbClientPolicy
+    else:
+        poster = blade.post_smb_share_policies
+        patcher = blade.patch_smb_share_policies
+        rule_getter = blade.get_smb_share_policies_rules
+        rule_poster = blade.post_smb_share_policies_rules
+        policy_model = SmbSharePolicy
+    res = poster(names=[target], **ctx)
+    if res.status_code != 200:
+        return res
+    if not source.enabled:
+        res = patcher(names=[target], policy=policy_model(enabled=False), **ctx)
+        if res.status_code != 200:
+            return res
+    rules_res = rule_getter(policy_names=[source.name], **ctx)
+    rules = list(rules_res.items) if rules_res.status_code == 200 else []
+    if policy_type != "smb_share":
+        # Client rules are evaluated in index order; share rules have no index.
+        rules.sort(key=lambda rule: rule.index)
+    for rule in rules:
+        if policy_type == "nfs":
+            new_rule = _nfs_rule(
+                versions,
+                client=rule.client,
+                permission=rule.permission,
+                access=getattr(rule, "access", None),
+                anonuid=_anon_id(getattr(rule, "anonuid", None)),
+                anongid=_anon_id(getattr(rule, "anongid", None)),
+                fileid_32bit=rule.fileid_32bit,
+                atime=rule.atime,
+                secure=rule.secure,
+                security=rule.security,
+            )
+        elif policy_type == "smb_client":
+            if LooseVersion(SMB_ENCRYPT_API_VERSION) <= LooseVersion(versions):
+                new_rule = SmbClientPolicyRule(
+                    client=rule.client,
+                    permission=rule.permission,
+                    encryption=rule.encryption,
+                )
+            else:
+                new_rule = SmbClientPolicyRule(
+                    client=rule.client, permission=rule.permission
+                )
+        else:
+            new_rule = SmbSharePolicyRule(
+                principal=rule.principal,
+                read=rule.read,
+                change=rule.change,
+                full_control=rule.full_control,
+            )
+        res = rule_poster(policy_names=[target], rule=new_rule, **ctx)
+        if res.status_code != 200:
+            return res
+    return res
+
+
+def copy_policy(module, blade, source):
+    """Copy a snapshot, NFS, SMB or WORM policy to a new policy I(target).
+
+    The REST API has no copy operation for these policy types, so the target
+    is created with the source settings and the source rules are re-created
+    on it. Network access policies cannot be created, so they cannot be
+    copied either.
+    """
+    changed = True
+    versions = get_rest_api_version(blade)
+    ctx = _context_kwargs(module, versions)
+    policy_type = module.params["policy_type"]
+    target = module.params["target"]
+    if not target:
+        module.fail_json(msg="`target` is required when state is copy")
+    if not source:
+        module.fail_json(msg="Policy {0} does not exist".format(module.params["name"]))
+    getters = {
+        "snapshot": blade.get_policies,
+        "nfs": blade.get_nfs_export_policies,
+        "smb_client": blade.get_smb_client_policies,
+        "smb_share": blade.get_smb_share_policies,
+        "worm": blade.get_worm_data_policies,
+    }
+    if policy_type not in getters:
+        module.fail_json(
+            msg="Copy is not supported for {0} policies".format(policy_type)
+        )
+    if getters[policy_type](names=[target], **ctx).status_code == 200:
+        module.fail_json(msg="Target policy {0} already exists".format(target))
+    if not module.check_mode:
+        if policy_type == "snapshot":
+            policy_kwargs = {"enabled": source.enabled}
+            rules = []
+            for rule in source.rules or []:
+                rule_kwargs = {"every": rule.every, "keep_for": rule.keep_for}
+                if rule.at is not None:
+                    rule_kwargs["at"] = rule.at
+                    rule_kwargs["time_zone"] = rule.time_zone
+                rules.append(PolicyRule(**rule_kwargs))
+            if rules:
+                policy_kwargs["rules"] = rules
+            res = blade.post_policies(
+                names=[target], policy=Policy(**policy_kwargs), **ctx
+            )
+        elif policy_type == "worm":
+            res = blade.post_worm_data_policies(
+                names=[target],
+                policy=WormDataPolicy(
+                    enabled=source.enabled,
+                    mode=source.mode,
+                    min_retention=source.min_retention,
+                    max_retention=source.max_retention,
+                    default_retention=source.default_retention,
+                    retention_lock=source.retention_lock,
+                ),
+                **ctx,
+            )
+        else:
+            res = _copy_rule_policy(module, blade, source, versions, ctx)
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to copy policy {0} to {1}. Error: {2}".format(
+                    module.params["name"], target, get_error_message(res)
+                )
+            )
+    module.exit_json(changed=changed)
+
+
 def main():
     argument_spec = purefb_argument_spec()
     argument_spec.update(
@@ -4230,7 +4024,7 @@ def main():
             rename=dict(type="str"),
             rule=dict(type="str"),
             user=dict(type="str"),
-            effect=dict(type="str", default="allow", choices=["allow", "deny"]),
+            effect=dict(type="str", choices=["allow", "deny"]),
             actions=dict(
                 type="list",
                 elements="str",
@@ -4275,24 +4069,24 @@ def main():
             s3_delimiters=dict(type="list", elements="str"),
             ignore_enforcement=dict(type="bool", default=True),
             force_delete=dict(type="bool", default=False),
+            # Rule fields carry no argspec default so that an update only
+            # touches what the task set; the defaults are applied on create.
             access=dict(
                 type="str",
                 choices=["root-squash", "all-squash", "no-squash"],
-                default="root-squash",
             ),
-            anonuid=dict(type="str"),
-            anongid=dict(type="str"),
-            atime=dict(type="bool", default=True),
+            anonuid=dict(type="int"),
+            anongid=dict(type="int"),
+            atime=dict(type="bool"),
             client=dict(type="str"),
-            fileid_32bit=dict(type="bool", default=False),
-            permission=dict(type="str", choices=["rw", "ro"], default="ro"),
-            secure=dict(type="bool", default=False),
+            fileid_32bit=dict(type="bool"),
+            permission=dict(type="str", choices=["rw", "ro"]),
+            secure=dict(type="bool"),
             destroy_snapshots=dict(type="bool", default=False),
             security=dict(
                 type="list",
                 elements="str",
                 choices=["sys", "krb5", "krb5i", "krb5p"],
-                default=["sys"],
             ),
             before_rule=dict(type="int"),
             principal=dict(type="str"),
@@ -4301,7 +4095,6 @@ def main():
             full_control=dict(type="str", choices=["deny", "allow", ""]),
             smb_encryption=dict(
                 type="str",
-                default="optional",
                 choices=["disabled", "optional", "required"],
             ),
             desc=dict(type="str", default=""),
@@ -4403,7 +4196,17 @@ def main():
             create_os_policy(module, blade)
         elif state == "absent" and policy:
             delete_os_policy(module, blade)
-        elif state == "copy" and module.params["target"] and module.params["rule"]:
+        elif state == "copy":
+            if not module.params["target"] or not module.params["rule"]:
+                module.fail_json(
+                    msg="`target` and `rule` are required to copy an access policy rule"
+                )
+            if not policy:
+                module.fail_json(
+                    msg="Policy {0}/{1} does not exist".format(
+                        module.params["account"], module.params["name"]
+                    )
+                )
             if "/" not in module.params["target"]:
                 module.fail_json(
                     msg='Incorrect format for target policy. Must be "<account>/<name>"'
@@ -4515,6 +4318,8 @@ def main():
             create_nfs_policy(module, blade)
         elif state == "absent" and policy:
             delete_nfs_policy(module, blade)
+        elif state == "copy":
+            copy_policy(module, blade, policy)
     elif module.params["policy_type"] == "smb_client":
         if LooseVersion(SMB_POLICY_API_VERSION) > LooseVersion(versions):
             module.fail_json(
@@ -4602,6 +4407,8 @@ def main():
             create_smb_client_policy(module, blade)
         elif state == "absent" and policy:
             delete_smb_client_policy(module, blade)
+        elif state == "copy":
+            copy_policy(module, blade, policy)
     elif module.params["policy_type"] == "smb_share":
         if LooseVersion(SMB_POLICY_API_VERSION) > LooseVersion(versions):
             module.fail_json(
@@ -4652,34 +4459,11 @@ def main():
                 new_policy = None
         if policy and state == "present" and not module.params["rename"]:
             if module.params["before_rule"]:
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
-                    and module.params["context"]
-                ):
-                    res = blade.get_smb_share_policies_rules(
-                        policy_names=[module.params["name"]],
-                        names=[
-                            module.params["name"]
-                            + "."
-                            + str(module.params["before_rule"])
-                        ],
-                        context_names=[module.params["context"]],
-                    )
-                else:
-                    res = blade.get_smb_share_policies_rules(
-                        policy_names=[module.params["name"]],
-                        names=[
-                            module.params["name"]
-                            + "."
-                            + str(module.params["before_rule"])
-                        ],
-                    )
-                if res.status_code != 200:
-                    module.fail_json(
-                        msg="Rule index {0} does not exist.".format(
-                            module.params["before_rule"]
-                        )
-                    )
+                # Share rules are keyed by principal and have no index or
+                # evaluation order, so there is nothing to move them before.
+                module.fail_json(
+                    msg="`before_rule` is not supported for SMB share policies"
+                )
             update_smb_share_policy(module, blade)
         elif (
             state == "present" and module.params["rename"] and policy and not new_policy
@@ -4689,6 +4473,8 @@ def main():
             create_smb_share_policy(module, blade)
         elif state == "absent" and policy:
             delete_smb_share_policy(module, blade)
+        elif state == "copy":
+            copy_policy(module, blade, policy)
     elif module.params["policy_type"] == "network":
         if LooseVersion(NET_POLICY_API_VERSION) > LooseVersion(versions):
             module.fail_json(
@@ -4778,6 +4564,8 @@ def main():
             create_network_access_policy(module, blade)
         elif state == "absent" and policy:
             delete_network_access_policy(module, blade)
+        elif state == "copy":
+            module.fail_json(msg="Network access policies cannot be copied")
     elif module.params["policy_type"] == "worm":
         if LooseVersion(WORM_POLICY_API_VERSION) > LooseVersion(versions):
             module.fail_json(
@@ -4860,11 +4648,13 @@ def main():
         elif (
             state == "present" and module.params["rename"] and policy and not new_policy
         ):
-            rename_worm_data_policy(blade)
+            rename_worm_data_policy(module)
         elif state == "present" and not policy and not module.params["rename"]:
             create_worm_data_policy(module, blade)
         elif state == "absent" and policy:
             delete_worm_data_policy(module, blade)
+        elif state == "copy":
+            copy_policy(module, blade, policy)
     else:
         if not HAS_PYPURECLIENT:
             module.fail_json(msg="py-pure-client sdk is required for this module")
@@ -4885,15 +4675,29 @@ def main():
                 ]
         except AttributeError:
             policy = None
-        if not policy and state == "present":
+        if module.params["rename"]:
+            try:
+                new_policy = list(
+                    blade.get_policies(
+                        names=[module.params["rename"]],
+                        **_context_kwargs(module, versions),
+                    ).items
+                )[0]
+            except AttributeError:
+                new_policy = None
+        if state == "present" and module.params["rename"] and policy and not new_policy:
+            rename_snap_policy(module, blade)
+        elif not policy and state == "present" and not module.params["rename"]:
             create_snap_policy(module, blade)
-        elif policy and state == "present":
+        elif policy and state == "present" and not module.params["rename"]:
             update_snap_policy(module, blade)
         elif policy and state == "absent":
             if module.params["filesystem"] or module.params["replica_link"]:
                 update_snap_policy(module, blade)
             else:
                 delete_snap_policy(module, blade)
+        elif state == "copy":
+            copy_policy(module, blade, policy)
 
     module.exit_json(changed=False)
 

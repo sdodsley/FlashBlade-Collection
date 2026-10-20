@@ -108,6 +108,8 @@ options:
      - If set to true, a locked object will be read-only and no new versions of
        the object may be created due to modifications
      - After enabling, can be disabled only by contacting Pure Technical Services
+     - The array rejects I(freeze_locked_objects=true) together with
+       I(versioning=enabled) as an invalid combination
     type: bool
     default: false
     version_added: '1.12.0'
@@ -115,8 +117,11 @@ options:
     description:
      - The retention period, in days, used to apply locks on new objects if
        none is specified by the S3 client
-     - Valid values between 1 and 365000
+     - Valid values between 1 and 365000, given as a number of days
+       (a trailing C(d) is accepted, for example C(7d))
      - Use "" to clear
+     - On an existing bucket this is compared with the current value and
+       changed when it differs. On a I(ratcheted) bucket it can only be raised.
     type: str
     version_added: '1.12.0'
   block_new_public_policies:
@@ -133,20 +138,32 @@ options:
   eradication_mode:
     description:
     - The eradication mode of the bucket.
+    - This is the only per-bucket eradication setting the REST API accepts.
+    - Switching to I(retention-based) requires object lock on the bucket and is one-way; the array
+      refuses to change the mode back to I(permission-based).
     type: str
     choices: [ "permission-based", "retention-based" ]
     version_added: '1.17.0'
   manual_eradication:
     description:
-    - The manual eradication status of the bucket. If false, the bucket cannot be eradicated after
-      it has been destroyed, unless it is empty. If true, the bucket can be eradicated.
+    - Not settable per bucket. A bucket inherits its manual eradication status
+      from the array-wide eradication config (REST C(PATCH /arrays)
+      I(eradication_config.manual_eradication), CLI
+      C(purearray eradication-config setattr)); the REST API rejects the
+      field on a bucket and this module fails when it is set.
+    - The inherited value is reported by M(everpure.flashblade.purefb_info)
+      under I(buckets.<name>.eradication_config).
     type: bool
     version_added: '1.17.0'
   eradication_delay:
     description:
-    - Minimum eradication delay in days. Automatically eradicate destroyed buckets after
-      the delay time passes unless automatic eradication is delayed due to other configuration values.
-    - Valid values are integer days from 1 to 30. Default is 1.
+    - Not settable per bucket. A bucket inherits its eradication delay from
+      the array-wide eradication config (REST C(PATCH /arrays)
+      I(eradication_config.eradication_delay), CLI
+      C(purearray eradication-config setattr)); the REST API rejects the
+      field on a bucket and this module fails when it is set.
+    - The inherited value is reported by M(everpure.flashblade.purefb_info)
+      under I(buckets.<name>.eradication_config).
     type: int
     version_added: '1.17.0'
   context:
@@ -231,12 +248,12 @@ try:
         BucketPost,
         ReferenceWritable,
         BucketPatch,
+        BucketEradicationConfig,
         ObjectLockConfigRequestBody,
         PublicAccessConfig,
         BucketAccessPolicyPost,
         BucketAccessPolicyRulePost,
         BucketAccessPolicyRulePrincipal,
-        BucketEradicationConfig,
     )
 except ImportError:
     HAS_PYPURECLIENT = False
@@ -255,12 +272,102 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
     human_to_bytes,
 )
 
-SEC_PER_DAY = 86400000
+MS_PER_DAY = 86400000
 VSO_VERSION = "2.5"
 QUOTA_VERSION = "2.8"
 MODE_VERSION = "2.12"
 WORM_VERSION = "2.13"
 CONTEXT_API_VERSION = "2.17"
+
+
+def _context_kwargs(module, api_version):
+    """Return context_names kwargs when a fleet context applies, else {}"""
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
+        return {"context_names": [module.params["context"]]}
+    return {}
+
+
+def _eradication_mode_patch(mode):
+    """Build the PATCH /buckets body that sets eradication_mode.
+
+    eradication_mode is the only writable field of a bucket's
+    eradication_config. eradication_delay and manual_eradication are
+    read-only on a bucket (the array answers "Invalid body parameter" when
+    they are sent) and are inherited from the array-wide eradication config.
+    """
+    return BucketPatch(
+        eradication_config=BucketEradicationConfig(eradication_mode=mode)
+    )
+
+
+def _retention_to_ms(module, value):
+    """Convert default_retention (days, optional trailing d; "" clears) to ms"""
+    if value is None:
+        return 0
+    text = str(value).strip().lower()
+    if text == "":
+        return 0
+    if text.endswith("d"):
+        text = text[:-1]
+    try:
+        days = int(text)
+    except ValueError:
+        module.fail_json(
+            msg='default_retention must be a number of days (1-365000) or "" '
+            "to clear, got {0}".format(value)
+        )
+    if not 1 <= days <= 365000:
+        module.fail_json(msg="default_retention must be between 1 and 365000 days")
+    return days * MS_PER_DAY
+
+
+def _object_lock_changes(module, bucket_detail):
+    """Return the object_lock_config fields that differ from the request.
+
+    Only the requested fields that differ are returned, so the PATCH is
+    minimal and a repeat run finds nothing to change. Settings the array
+    does not allow to be lowered are reported with a warning instead.
+    """
+    current = getattr(bucket_detail, "object_lock_config", None)
+    cur_enabled = bool(getattr(current, "enabled", False))
+    cur_freeze = bool(getattr(current, "freeze_locked_objects", False))
+    cur_mode = getattr(current, "default_retention_mode", None) or ""
+    cur_retention = getattr(current, "default_retention", None) or 0
+    ratcheted = getattr(bucket_detail, "retention_lock", None) == "ratcheted"
+    changes = {}
+    if module.params["object_lock_enabled"] and not cur_enabled:
+        changes["enabled"] = True
+    elif not module.params["object_lock_enabled"] and cur_enabled:
+        module.warn("Object lock cannot be disabled.")
+    if module.params["freeze_locked_objects"] and not cur_freeze:
+        changes["freeze_locked_objects"] = True
+    elif not module.params["freeze_locked_objects"] and cur_freeze:
+        module.warn("Freeze locked objects cannot be disabled.")
+    if (
+        module.params["retention_mode"] is not None
+        and module.params["retention_mode"] != cur_mode
+    ):
+        if ratcheted and cur_mode == "compliance":
+            module.warn(
+                "Changing retention_mode can only be performed by Pure Technical Support."
+            )
+        else:
+            changes["default_retention_mode"] = module.params["retention_mode"]
+    if module.params["default_retention"] is not None:
+        new_retention = _retention_to_ms(module, module.params["default_retention"])
+        if new_retention != cur_retention:
+            if ratcheted and new_retention < cur_retention:
+                module.warn(
+                    "Default retention can only be reduced by Pure Technical Support."
+                )
+            else:
+                changes["default_retention"] = (
+                    str(new_retention) if new_retention else ""
+                )
+    return changes
 
 
 def get_s3acc(module, blade):
@@ -322,7 +429,9 @@ def create_bucket(module, blade):
                     ).items
                 )[0]
             if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
-                if not module.params["hard_limit"]:
+                if module.params["hard_limit"] is None:
+                    # Not requested: inherit the account default. An explicit
+                    # false must not be replaced by the account default.
                     module.params["hard_limit"] = account_defaults.hard_limit_enabled
                 if module.params["quota"]:
                     quota = str(human_to_bytes(module.params["quota"]))
@@ -333,12 +442,12 @@ def create_bucket(module, blade):
                         quota = str(account_defaults.quota_limit)
                 if not module.params["retention_mode"]:
                     module.params["retention_mode"] = ""
-                if not module.params["default_retention"]:
-                    module.params["default_retention"] = ""
-                else:
-                    module.params["default_retention"] = str(
-                        int(module.params["default_retention"]) * 86400000
-                    )
+                retention_ms = _retention_to_ms(
+                    module, module.params["default_retention"]
+                )
+                module.params["default_retention"] = (
+                    str(retention_ms) if retention_ms else ""
+                )
                 if module.params["object_lock_enabled"]:
                     bucket = BucketPost(
                         account=ReferenceWritable(name=module.params["account"]),
@@ -479,59 +588,43 @@ def create_bucket(module, blade):
                         )
                     )
         if LooseVersion(MODE_VERSION) <= LooseVersion(api_version):
-            if not module.params["block_new_public_policies"]:
-                module.params["block_new_public_policies"] = False
-            if not module.params["block_public_access"]:
-                module.params["block_public_access"] = False
-            pac = BucketPatch(
-                public_access_config=PublicAccessConfig(
-                    block_new_public_policies=module.params[
-                        "block_new_public_policies"
-                    ],
-                    block_public_access=module.params["block_public_access"],
+            ctx = _context_kwargs(module, api_version)
+            block_policies = module.params["block_new_public_policies"]
+            block_access = module.params["block_public_access"]
+            if block_policies is not None or block_access is not None:
+                # Only send what was asked for. Anything left unset keeps the
+                # array default (public access blocked), so a bucket created
+                # without these options is never made public here.
+                pac = BucketPatch(
+                    public_access_config=PublicAccessConfig(
+                        block_new_public_policies=block_policies,
+                        block_public_access=block_access,
+                    )
                 )
-            )
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["context"]
-            ):
                 res = blade.patch_buckets(
-                    bucket=pac,
-                    names=[module.params["name"]],
-                    context_names=[module.params["context"]],
+                    bucket=pac, names=[module.params["name"]], **ctx
                 )
-            else:
-                res = blade.patch_buckets(bucket=pac, names=[module.params["name"]])
-            if res.status_code != 200:
-                module.warn(
-                    "Failed to set Public Access config correctly for bucket {0}. "
-                    "Error: {1}".format(module.params["name"], get_error_message(res))
-                )
-            if (
-                not module.params["block_public_access"]
-                and not module.params["block_new_public_policies"]
-            ):
-                # To make the bucket truely public we have to create a bucket access policy
-                # and rule
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to set Public Access config for bucket {0}. "
+                        "Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
+                    )
+            if block_policies is False and block_access is False:
+                # Both blocks were explicitly lifted: the caller wants a public
+                # bucket, which also needs a bucket access policy with a rule
+                # granting s3:GetObject to all principals.
                 policy = BucketAccessPolicyPost(
                     name=module.params["name"],
                 )
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                    and module.params["context"]
-                ):
-                    res = blade.post_buckets_bucket_access_policies(
-                        bucket_names=[module.params["name"]],
-                        policy=policy,
-                        context_names=[module.params["context"]],
-                    )
-                else:
-                    res = blade.post_buckets_bucket_access_policies(
-                        bucket_names=[module.params["name"]], policy=policy
-                    )
+                res = blade.post_buckets_bucket_access_policies(
+                    bucket_names=[module.params["name"]], policy=policy, **ctx
+                )
                 if res.status_code != 200:
-                    module.warn(
-                        "Failed to set bucket access policy for bucket {0}. Error: {1}".format(
+                    module.fail_json(
+                        msg="Failed to set bucket access policy for bucket {0}. "
+                        "Error: {1}".format(
                             module.params["name"], get_error_message(res)
                         )
                     )
@@ -541,25 +634,16 @@ def create_bucket(module, blade):
                     principals=BucketAccessPolicyRulePrincipal(all=True),
                     resources=[module.params["name"] + "/*"],
                 )
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                    and module.params["context"]
-                ):
-                    res = blade.post_buckets_bucket_access_policies_rules(
-                        bucket_names=[module.params["name"]],
-                        rule=rule,
-                        names=["default"],
-                        context_names=[module.params["context"]],
-                    )
-                else:
-                    res = blade.post_buckets_bucket_access_policies_rules(
-                        bucket_names=[module.params["name"]],
-                        rule=rule,
-                        names=["default"],
-                    )
+                res = blade.post_buckets_bucket_access_policies_rules(
+                    bucket_names=[module.params["name"]],
+                    rule=rule,
+                    names=["default"],
+                    **ctx
+                )
                 if res.status_code != 200:
-                    module.warn(
-                        "Failed to set bucket access policy rule for bucket {0}. Error: {1}".format(
+                    module.fail_json(
+                        msg="Failed to set bucket access policy rule for bucket {0}. "
+                        "Error: {1}".format(
                             module.params["name"], get_error_message(res)
                         )
                     )
@@ -567,37 +651,14 @@ def create_bucket(module, blade):
             LooseVersion(WORM_VERSION) <= LooseVersion(api_version)
             and module.params["eradication_mode"]
         ):
-            if not module.params["eradication_delay"]:
-                module.params["eradication_delay"] = SEC_PER_DAY
-            else:
-                module.params["eradication_delay"] = (
-                    module.params["eradication_delay"] * SEC_PER_DAY
-                )
-            if not module.params["manual_eradication"]:
-                module.params["manual_eradication"] = "disabled"
-            else:
-                module.params["manual_eradication"] = "enabled"
-            worm = BucketPatch(
-                eradication_config=BucketEradicationConfig(
-                    manual_eradication=module.params["manual_eradication"],
-                    eradication_mode=module.params["eradication_mode"],
-                    eradication_delay=module.params["eradication_delay"],
-                )
+            res = blade.patch_buckets(
+                bucket=_eradication_mode_patch(module.params["eradication_mode"]),
+                names=[module.params["name"]],
+                **_context_kwargs(module, api_version)
             )
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["context"]
-            ):
-                res = blade.patch_buckets(
-                    bucket=worm,
-                    names=[module.params["name"]],
-                    context_names=[module.params["context"]],
-                )
-            else:
-                res = blade.patch_buckets(bucket=worm, names=[module.params["name"]])
             if res.status_code != 200:
-                module.warn(
-                    "Failed to set Bucket Eradication config correctly for bucket {0}. "
+                module.fail_json(
+                    msg="Failed to set Bucket Eradication config for bucket {0}. "
                     "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
     module.exit_json(changed=changed)
@@ -644,8 +705,8 @@ def delete_bucket(module, blade):
                 names=[module.params["name"]], bucket=BucketPatch(destroyed=True)
             )
         if res.status_code != 200:
-            module.warn(
-                "Deletion for bucket {0} failed. "
+            module.fail_json(
+                msg="Deletion for bucket {0} failed. "
                 "Error: {1}".format(module.params["name"], get_error_message(res))
             )
         if module.params["eradicate"]:
@@ -660,8 +721,8 @@ def delete_bucket(module, blade):
             else:
                 res = blade.delete_buckets(names=[module.params["name"]])
             if res.status_code != 200:
-                module.warn(
-                    "Eradication for bucket {0} failed. "
+                module.fail_json(
+                    msg="Eradication for bucket {0} failed. "
                     "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
     module.exit_json(changed=changed)
@@ -700,52 +761,15 @@ def update_bucket(module, blade, bucket):
     change_pac = False
     change_worm = False
     change_quota = False
+    change_lock = False
     api_version = get_rest_api_version(blade)
-    if (
-        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-        and module.params["context"]
-    ):
-        bucket_detail = list(
-            blade.get_buckets(
-                names=[module.params["name"]], context_names=[module.params["context"]]
-            ).items
-        )[0]
-    else:
-        bucket_detail = list(blade.get_buckets(names=[module.params["name"]]).items)[0]
+    ctx = _context_kwargs(module, api_version)
+    bucket_detail = list(blade.get_buckets(names=[module.params["name"]], **ctx).items)[
+        0
+    ]
     if LooseVersion(VSO_VERSION) <= LooseVersion(api_version):
         if module.params["mode"] and bucket_detail.bucket_type != module.params["mode"]:
             module.warn("Changing bucket type is not permitted.")
-        if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
-            if (
-                bucket_detail.retention_lock == "ratcheted"
-                and getattr(
-                    bucket_detail.object_lock_config, "default_retention_mode", None
-                )
-                == "compliance"
-                and module.params["retention_mode"] != "compliance"
-            ):
-                module.warn(
-                    "Changing retention_mode can only be performed by Pure Technical Support."
-                )
-        if not module.params["object_lock_enabled"] and getattr(
-            bucket_detail.object_lock_config, "enabled", False
-        ):
-            module.warn("Object lock cannot be disabled.")
-        if not module.params["freeze_locked_objects"] and getattr(
-            bucket_detail.object_lock_config, "freeze_locked_objects", False
-        ):
-            module.warn("Freeze locked onjects cannot be disabled.")
-        default_retention = getattr(
-            bucket_detail.object_lock_config, "default_retention"
-        )
-        if default_retention and default_retention > 1:
-            if (
-                default_retention / 86400000 > int(module.params["default_retention"])
-                and bucket_detail.retention_lock == "ratcheted"
-            ):
-                module.warn(
-                    "Default retention can only be reduced by Pure Technical Support."
-                )
 
     if module.params["versioning"] is not None and bucket.versioning != "none":
         # "absent" is the module's sentinel, not a valid API value, and versioning
@@ -802,6 +826,45 @@ def update_bucket(module, blade, bucket):
                     )
                 )
     if LooseVersion(QUOTA_VERSION) <= LooseVersion(api_version):
+        # Object lock configuration (after versioning, which object lock needs)
+        lock_changes = _object_lock_changes(module, bucket_detail)
+        if lock_changes:
+            change_lock = True
+            if not module.check_mode:
+                res = blade.patch_buckets(
+                    names=[module.params["name"]],
+                    bucket=BucketPatch(
+                        object_lock_config=ObjectLockConfigRequestBody(**lock_changes)
+                    ),
+                    **ctx
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update object lock config for bucket {0}. "
+                        "Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
+                    )
+        if (
+            module.params["retention_lock"] == "ratcheted"
+            and bucket_detail.retention_lock != "ratcheted"
+        ):
+            # retention_lock can only ever be raised; unlocked (the option
+            # default) is left alone so an unrelated update never warns.
+            change_lock = True
+            if not module.check_mode:
+                res = blade.patch_buckets(
+                    names=[module.params["name"]],
+                    bucket=BucketPatch(retention_lock="ratcheted"),
+                    **ctx
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to set retention_lock for bucket {0}. "
+                        "Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
+                    )
         current_quota = {
             "quota": bucket_detail.quota_limit,
             "hard": bucket_detail.hard_limit_enabled,
@@ -819,7 +882,7 @@ def update_bucket(module, blade, bucket):
                 change_quota = True
                 new_quota["quota"] = human_to_bytes(module.params["quota"])
         if (
-            module.params["hard_limit"]
+            module.params["hard_limit"] is not None
             and module.params["hard_limit"] != current_quota["hard"]
         ):
             change_quota = True
@@ -894,61 +957,32 @@ def update_bucket(module, blade, bucket):
                     "Error: {1}".format(module.params["name"], get_error_message(res))
                 )
     if LooseVersion(WORM_VERSION) <= LooseVersion(api_version):
-        current_worm = {
-            "eradication_delay": bucket_detail.eradication_config.eradication_delay,
-            "manual_eradication": bucket_detail.eradication_config.manual_eradication,
-            "eradication_mode": bucket_detail.eradication_config.eradication_mode,
-        }
-        if module.params["eradication_delay"] is None:
-            new_delay = current_worm["eradication_delay"]
-        else:
-            new_delay = module.params["eradication_delay"] * SEC_PER_DAY
-        if module.params["manual_eradication"] is None:
-            new_manual = current_worm["manual_eradication"]
-        else:
-            if module.params["manual_eradication"]:
-                new_manual = "enabled"
-            else:
-                new_manual = "disabled"
-        if (
-            module.params["eradication_mode"]
-            and module.params["eradication_mode"] != current_worm["eradication_mode"]
-        ):
-            new_mode = module.params["eradication_mode"]
-        else:
-            new_mode = current_worm["eradication_mode"]
-        new_worm = {
-            "eradication_delay": new_delay,
-            "manual_eradication": new_manual,
-            "eradication_mode": new_mode,
-        }
-        if current_worm != new_worm:
+        # eradication_mode is the only per-bucket eradication setting; the
+        # delay and manual status are array-wide and rejected in main().
+        current_mode = getattr(
+            getattr(bucket_detail, "eradication_config", None),
+            "eradication_mode",
+            None,
+        )
+        new_mode = module.params["eradication_mode"]
+        if new_mode and new_mode != current_mode:
             change_worm = True
-            worm = BucketPatch(
-                public_access_config=BucketEradicationConfig(
-                    eradication_delay=new_worm["eradication_delay"],
-                    manual_eradication=new_worm["manual_eradication"],
-                    eradication_mode=new_worm["eradication_mode"],
-                )
-            )
-        if change_worm and not module.check_mode:
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["context"]
-            ):
+            if not module.check_mode:
                 res = blade.patch_buckets(
-                    bucket=worm,
+                    bucket=_eradication_mode_patch(new_mode),
                     names=[module.params["name"]],
-                    context_names=[module.params["context"]],
+                    **ctx
                 )
-            else:
-                res = blade.patch_buckets(bucket=worm, names=[module.params["name"]])
-            if res.status_code != 200:
-                module.fail_json(
-                    msg="Failed to update Eradication config correctly for bucket {0}. "
-                    "Error: {1}".format(module.params["name"], get_error_message(res))
-                )
-    module.exit_json(changed=(changed or change_pac or change_worm or change_quota))
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update Eradication config correctly for "
+                        "bucket {0}. Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
+                    )
+    module.exit_json(
+        changed=(changed or change_pac or change_worm or change_quota or change_lock)
+    )
 
 
 def eradicate_bucket(module, blade):
@@ -1015,10 +1049,20 @@ def main():
         module.fail_json(msg="py-pure-client sdk is required")
 
     if (
-        module.params["eradication_delay"]
-        and not 30 >= module.params["eradication_delay"] >= 1
+        module.params["eradication_delay"] is not None
+        or module.params["manual_eradication"] is not None
     ):
-        module.fail_json(msg="Eradication Delay must be between 1 and 30 days.")
+        # Both fields are read-only on a bucket at every REST API version
+        # (py-pure-client strips them from BucketEradicationConfig requests
+        # and the array answers "Invalid body parameter" when they are sent).
+        # A bucket inherits them from the array-wide eradication config.
+        module.fail_json(
+            msg="eradication_delay and manual_eradication are read-only on a "
+            "bucket: Purity//FB inherits them from the array-wide eradication "
+            "config (REST PATCH /arrays eradication_config, CLI purearray "
+            "eradication-config setattr). Only eradication_mode can be set "
+            "per bucket."
+        )
 
     state = module.params["state"]
     blade = get_system(module)

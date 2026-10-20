@@ -135,20 +135,24 @@ def update_role(module, blade):
     module.exit_json(changed=changed)
 
 
-def delete_role(module, blade):
+def delete_role(module, blade, current_role):
     """Delete Directory Service Role"""
-    changed = True
-    if not module.check_mode:
-        role = DirectoryServiceRole(group_base="", group="")
-        res = blade.patch_directory_services_roles(
-            names=[module.params["role"]], directory_service_roles=role
-        )
-        if res.status_code != 200:
-            module.fail_json(
-                msg="Delete Directory Service Role {0} failed. Error: {1}".format(
-                    module.params["role"], get_error_message(res)
-                )
+    changed = False
+    if getattr(current_role, "group", None) or getattr(
+        current_role, "group_base", None
+    ):
+        changed = True
+        if not module.check_mode:
+            role = DirectoryServiceRole(group_base="", group="")
+            res = blade.patch_directory_services_roles(
+                names=[module.params["role"]], directory_service_roles=role
             )
+            if res.status_code != 200:
+                module.fail_json(
+                    msg="Delete Directory Service Role {0} failed. Error: {1}".format(
+                        module.params["role"], get_error_message(res)
+                    )
+                )
     module.exit_json(changed=changed)
 
 
@@ -197,16 +201,20 @@ def main():
 
     state = module.params["state"]
     blade = get_system(module)
-    role_configured = False
+    # The four roles are built in, so the GET always succeeds; a role is
+    # only "configured" when it has a group mapping.
+    role_exists = False
+    current_role = None
     res = blade.get_directory_services_roles(names=[module.params["role"]])
     if res.status_code == 200:
-        role_configured = True
+        role_exists = True
+        current_role = list(res.items)[0]
 
-    if state == "absent" and role_configured:
-        delete_role(module, blade)
-    elif role_configured and state == "present":
+    if state == "absent" and role_exists:
+        delete_role(module, blade, current_role)
+    elif role_exists and state == "present":
         update_role(module, blade)
-    elif not role_configured and state == "present":
+    elif not role_exists and state == "present":
         create_role(module, blade)
     else:
         module.exit_json(changed=False)

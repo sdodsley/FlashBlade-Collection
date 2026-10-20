@@ -351,10 +351,16 @@ def update_account(module, blade):
         0
     ]
     attr = {}
-    if (
-        module.params["join_ou"] != current_ad.join_ou
-        and module.params["encryption"].sort() != current_ad.encryption_types.sort()
-    ):
+    # join_ou is only compared when it was given: the array reports its
+    # own default (e.g. CN=Computers) which an omitted option must not undo.
+    join_ou_changed = (
+        module.params["join_ou"] is not None
+        and module.params["join_ou"] != current_ad.join_ou
+    )
+    encryption_changed = sorted(module.params["encryption"]) != sorted(
+        current_ad.encryption_types or []
+    )
+    if join_ou_changed and encryption_changed:
         module.fail_json(msg="Cannot make changes to OU when changing encryption types")
     if module.params["directory_servers"]:
         if current_ad.directory_servers:
@@ -370,10 +376,10 @@ def update_account(module, blade):
             ):
                 attr["kerberos_servers"] = module.params["kerberos_servers"]
                 mod_ad = True
-    if module.params["join_ou"] != current_ad.join_ou:
+    if join_ou_changed:
         attr["join_ou"] = module.params["join_ou"]
         mod_ad = True
-    if sorted(module.params["encryption"]) != sorted(current_ad.encryption_types):
+    if encryption_changed:
         attr["encryption_types"] = module.params["encryption"]
         mod_ad = True
     if module.params["service"] and module.params["service"] != [""]:

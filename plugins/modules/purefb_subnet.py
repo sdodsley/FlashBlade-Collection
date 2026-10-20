@@ -51,8 +51,9 @@ options:
   mtu:
     description:
       - MTU size of the subnet. Range is 1280 to 9216.
+      - Defaults to 1500 when creating a subnet. When modifying an
+        existing subnet an omitted value leaves the current MTU unchanged.
     required: false
-    default: 1500
     type: int
   prefix:
     description:
@@ -64,8 +65,9 @@ options:
   vlan:
     description:
       - VLAN ID of the subnet.
+      - Defaults to 0 when creating a subnet. When modifying an existing
+        subnet an omitted value leaves the current VLAN ID unchanged.
     required: false
-    default: 0
     type: int
 extends_documentation_fragment:
     - everpure.flashblade.everpure.fb
@@ -193,7 +195,7 @@ def modify_subnet(module, blade):
                             get_error_message(res),
                         )
                     )
-    if module.params["vlan"]:
+    if module.params["vlan"] is not None:
         if module.params["vlan"] != subnet.vlan:
             changed = True
             if not module.check_mode:
@@ -225,7 +227,7 @@ def modify_subnet(module, blade):
                             get_error_message(res),
                         )
                     )
-    if module.params["mtu"]:
+    if module.params["mtu"] is not None:
         if module.params["mtu"] != subnet.mtu:
             changed = True
             if not module.check_mode:
@@ -266,9 +268,9 @@ def main():
             state=dict(default="present", choices=["present", "absent"]),
             gateway=dict(),
             lag=dict(type="str", default="uplink"),
-            mtu=dict(type="int", default=1500),
+            mtu=dict(type="int"),
             prefix=dict(),
-            vlan=dict(type="int", default=0),
+            vlan=dict(type="int"),
         )
     )
 
@@ -291,13 +293,23 @@ def main():
         module.fail_json(msg="LAG {0} does not exist.".format(module.params["lag"]))
 
     if state == "present":
-        if not (1280 <= module.params["mtu"] <= 9216):
+        if not subnet:
+            # Creation defaults; on modification an omitted value is left alone
+            if module.params["mtu"] is None:
+                module.params["mtu"] = 1500
+            if module.params["vlan"] is None:
+                module.params["vlan"] = 0
+        if module.params["mtu"] is not None and not (
+            1280 <= module.params["mtu"] <= 9216
+        ):
             module.fail_json(
                 msg="MTU {0} is out of range (1280 to 9216)".format(
                     module.params["mtu"]
                 )
             )
-        if not (0 <= module.params["vlan"] <= 4094):
+        if module.params["vlan"] is not None and not (
+            0 <= module.params["vlan"] <= 4094
+        ):
             module.fail_json(
                 msg="VLAN ID {0} is out of range (0 to 4094)".format(
                     module.params["vlan"]
@@ -312,7 +324,8 @@ def main():
         nrange = netaddr.IPSet([module.params["prefix"]])
         for sub in subnets:
             if (
-                sub.vlan == module.params["vlan"]
+                module.params["vlan"] is not None
+                and sub.vlan == module.params["vlan"]
                 and sub.name != module.params["name"]
                 and hasattr(sub.link_aggregation_group, "name")
             ):

@@ -83,6 +83,17 @@ from plugins.modules.purefb_info import (
     generate_bucket_access_policies_dict,
     generate_lag_dict,
     generate_subnet_dict,
+    generate_bucket_cross_object_policies_dict,
+    generate_network_dict,
+    generate_smb_share_policies_dict,
+    generate_network_access_policies_dict,
+    generate_worm_data_policies_dict,
+    generate_tls_policies_dict,
+    generate_s3_export_policies_dict,
+    generate_object_store_account_exports_dict,
+    generate_object_store_virtual_hosts_dict,
+    generate_realms_dict,
+    generate_resource_accesses_dict,
 )
 
 
@@ -263,6 +274,7 @@ class TestPurefbInfo:
         assert "capacity" in call_args["purefb_info"]
         assert "network" in call_args["purefb_info"]
 
+    @patch("plugins.modules.purefb_info.generate_object_store_virtual_hosts_dict")
     @patch("plugins.modules.purefb_info.LooseVersion")
     @patch("plugins.modules.purefb_info.generate_perf_dict")
     @patch("plugins.modules.purefb_info.generate_config_dict")
@@ -319,6 +331,7 @@ class TestPurefbInfo:
         mock_generate_config,
         mock_generate_perf,
         mock_loose_version,
+        mock_generate_virtual_hosts,
     ):
         """Test main with 'all' subset"""
         # Setup mocks
@@ -362,12 +375,14 @@ class TestPurefbInfo:
         mock_generate_kerb.return_value = {}
         mock_generate_access_policies.return_value = {}
         mock_generate_nfs_export.return_value = {}
+        mock_generate_virtual_hosts.return_value = {}
 
         # Call main
         main()
 
         # Verify all generators were called
         mock_generate_default.assert_called_once()
+        mock_generate_virtual_hosts.assert_called_once()
         mock_generate_perf.assert_called_once()
         mock_generate_config.assert_called_once()
         mock_generate_capacity.assert_called_once()
@@ -659,6 +674,10 @@ class TestPurefbInfo:
         mock_dns.name = "management"
         mock_dns.domain = "example.com"
         mock_dns.nameservers = ["8.8.8.8", "8.8.4.4"]
+        # sources is a list of references (at most one), not a reference
+        mock_source = Mock(spec=["name"])
+        mock_source.name = "vir0"
+        mock_dns.sources = [mock_source]
         mock_blade.get_dns.return_value.items = [mock_dns]
 
         # Mock SMTP
@@ -698,8 +717,24 @@ class TestPurefbInfo:
         mock_array.ntp_servers = ["time.google.com"]
         mock_blade.get_arrays.return_value.items = [mock_array]
 
-        # Mock SSL certs
-        mock_blade.get_certificates.return_value.items = []
+        # Mock SSL certs - spec'd to the real attribute names so that the
+        # old misspelt reads (certificatei_type, intermeadiate_certificate)
+        # would come back as None
+        mock_cert = Mock(
+            spec=[
+                "name",
+                "certificate_type",
+                "intermediate_certificate",
+                "valid_from",
+                "valid_to",
+            ]
+        )
+        mock_cert.name = "management"
+        mock_cert.certificate_type = "external"
+        mock_cert.intermediate_certificate = "-----BEGIN CERTIFICATE-----"
+        mock_cert.valid_from = 1700000000000
+        mock_cert.valid_to = 1800000000000
+        mock_blade.get_certificates.return_value.items = [mock_cert]
 
         # Mock certificate groups
         mock_blade.get_certificate_groups.return_value.items = []
@@ -724,8 +759,12 @@ class TestPurefbInfo:
         assert "management" in result["dns"]
         assert result["dns"]["management"]["domain"] == "example.com"
         assert result["dns"]["management"]["nameservers"] == ["8.8.8.8", "8.8.4.4"]
+        assert result["dns"]["management"]["source"] == "vir0"
         assert "management_directory_service" in result
         assert "array_management" in result
+        cert = result["ssl_certs"]["management"]
+        assert cert["certificate_type"] == "external"
+        assert cert["intermediate_certificate"] == "-----BEGIN CERTIFICATE-----"
 
     def test_generate_password_policies_dict(self):
         """Test generate_password_policies_dict reports all fields in seconds"""
@@ -913,7 +952,7 @@ class TestPurefbInfo:
             share_policy=None,
             continuous_availability_enabled=False,
         )
-        fs1.multi_protocol = Mock(safeguard_acls=None, access_control_style=None)
+        fs1.multi_protocol = Mock(safeguard_acls=True, access_control_style=None)
         fs1.hard_limit_enabled = False
         fs1.promotion_status = None
         fs1.requested_promotion_state = None
@@ -937,6 +976,9 @@ class TestPurefbInfo:
 
         assert len(result["fs1"]["file_system_exports"]) == 1
         assert result["fs1"]["file_system_exports"][0]["export_name"] == "fs1_nfs"
+        # the misspelt key is kept alongside the correct one
+        assert result["fs1"]["multi_protocol"]["safegaurd_acls"] is True
+        assert result["fs1"]["multi_protocol"]["safeguard_acls"] is True
 
     def test_generate_array_conn_dict_keys_by_remote_and_reads_the_connection(self):
         """The dict is keyed by the remote name, values come from the connection.
@@ -1094,3 +1136,419 @@ class TestPurefbInfo:
         assert result["net2"]["lag"] is None
         assert result["net2"]["vlan"] is None
         assert result["net2"]["interfaces"] == [{"name": "vip1"}]
+    def test_generate_network_dict_reads_attached_servers_and_subnet(self):
+        """server comes from attached_servers[0] and subnet may be a dict.
+
+        The interface model has no server attribute (the API field is
+        attached_servers, a list of references) and subnet is a plain dict on
+        current SDKs, so both keys always read back as null. The spec'd mock
+        has no server attribute, matching the real model.
+        """
+        server = Mock(spec=["name"])
+        server.name = "_array_server"
+        port = Mock(
+            spec=[
+                "name",
+                "type",
+                "mtu",
+                "vlan",
+                "address",
+                "services",
+                "gateway",
+                "netmask",
+                "attached_servers",
+                "subnet",
+                "enabled",
+            ]
+        )
+        port.name = "vip1"
+        port.type = "vip"
+        port.mtu = 1500
+        port.vlan = 0
+        port.address = "10.0.0.5"
+        port.services = ["data"]
+        port.gateway = "10.0.0.1"
+        port.netmask = "255.255.255.0"
+        port.attached_servers = [server]
+        port.subnet = {"name": "data-subnet", "resource_type": "subnets"}
+        port.enabled = True
+
+        mock_blade = Mock()
+        mock_blade.get_network_interfaces.return_value.items = [port]
+
+        result = generate_network_dict(mock_blade)
+
+        assert result["vip1"]["server"] == "_array_server"
+        assert result["vip1"]["attached_servers"] == ["_array_server"]
+        assert result["vip1"]["subnet"] == "data-subnet"
+        assert result["vip1"]["address"] == "10.0.0.5"
+
+        # reference-shaped subnet, no attached server
+        subnet = Mock(spec=["name"])
+        subnet.name = "mgmt"
+        port.subnet = subnet
+        port.attached_servers = []
+        result = generate_network_dict(mock_blade)
+        assert result["vip1"]["server"] is None
+        assert result["vip1"]["attached_servers"] == []
+        assert result["vip1"]["subnet"] == "mgmt"
+
+    def test_generate_bucket_cross_object_policies_dict_reports_rules(self):
+        """The allowed_* lists live on the CORS rules, not on the policy.
+
+        Reading them from the policy raised AttributeError as soon as any
+        bucket had a CORS policy, which broke the policies subset. The spec'd
+        policy mock has no allowed_* attributes, matching the real model.
+        """
+        policy = Mock(spec=["name", "enabled", "is_local"])
+        policy.name = "bkt/cors"
+        policy.enabled = True
+        policy.is_local = True
+        rule = Mock(
+            spec=["name", "allowed_headers", "allowed_methods", "allowed_origins"]
+        )
+        rule.name = "bkt/cors/rule1"
+        rule.allowed_headers = ["*"]
+        rule.allowed_methods = ["GET", "PUT"]
+        rule.allowed_origins = ["*"]
+        bucket = Mock(spec=["name"])
+        bucket.name = "bkt"
+
+        policy_res = Mock()
+        policy_res.status_code = 200
+        policy_res.items = [policy]
+        rule_res = Mock()
+        rule_res.status_code = 200
+        rule_res.items = [rule]
+
+        mock_blade = Mock()
+        mock_blade.get_buckets.return_value.items = [bucket]
+        mock_blade.get_buckets_cross_origin_resource_sharing_policies.return_value = (
+            policy_res
+        )
+        mock_blade.get_buckets_cross_origin_resource_sharing_policies_rules.return_value = (
+            rule_res
+        )
+
+        result = generate_bucket_cross_object_policies_dict(mock_blade)
+
+        assert list(result) == ["bkt/cors"]
+        assert result["bkt/cors"]["enabled"] is True
+        assert result["bkt/cors"]["local"] is True
+        assert result["bkt/cors"]["rules"] == [
+            {
+                "name": "bkt/cors/rule1",
+                "allowed_headers": ["*"],
+                "allowed_methods": ["GET", "PUT"],
+                "allowed_origins": ["*"],
+            }
+        ]
+        mock_blade.get_buckets_cross_origin_resource_sharing_policies_rules.assert_called_once_with(
+            policy_names=["bkt/cors"]
+        )
+
+        # a bucket whose policy lookup fails is skipped, not fatal
+        policy_res.status_code = 400
+        assert generate_bucket_cross_object_policies_dict(mock_blade) == {}
+
+    def test_generate_smb_share_policies_dict(self):
+        """SMB share policies are reported with their inline rules."""
+        rule = Mock(spec=["name", "principal", "change", "full_control", "read"])
+        rule.name = "share1/rule1"
+        rule.principal = "DOMAIN\\Everyone"
+        rule.change = "allow"
+        rule.full_control = "deny"
+        rule.read = "allow"
+        policy = Mock(spec=["name", "enabled", "is_local", "rules"])
+        policy.name = "share1"
+        policy.enabled = True
+        policy.is_local = True
+        policy.rules = [rule]
+
+        mock_blade = Mock()
+        mock_blade.get_smb_share_policies.return_value.items = [policy]
+
+        result = generate_smb_share_policies_dict(mock_blade)
+
+        assert result == {
+            "share1": {
+                "local": True,
+                "enabled": True,
+                "rules": [
+                    {
+                        "name": "share1/rule1",
+                        "principal": "DOMAIN\\Everyone",
+                        "change": "allow",
+                        "full_control": "deny",
+                        "read": "allow",
+                    }
+                ],
+            }
+        }
+
+    def test_generate_network_access_policies_dict(self):
+        """Network access policies are reported with their inline rules."""
+        rule = Mock(spec=["name", "client", "effect", "interfaces", "index"])
+        rule.name = "default-network-access-policy/rule1"
+        rule.client = "10.0.0.0/8"
+        rule.effect = "allow"
+        rule.interfaces = ["management-ssh"]
+        rule.index = 1
+        policy = Mock(spec=["name", "enabled", "is_local", "version", "rules"])
+        policy.name = "default-network-access-policy"
+        policy.enabled = True
+        policy.is_local = True
+        policy.version = "abc123"
+        policy.rules = [rule]
+
+        mock_blade = Mock()
+        mock_blade.get_network_access_policies.return_value.items = [policy]
+
+        result = generate_network_access_policies_dict(mock_blade)
+
+        entry = result["default-network-access-policy"]
+        assert entry["version"] == "abc123"
+        assert entry["rules"] == [
+            {
+                "name": "default-network-access-policy/rule1",
+                "client": "10.0.0.0/8",
+                "effect": "allow",
+                "interfaces": ["management-ssh"],
+                "index": 1,
+            }
+        ]
+
+    def test_generate_worm_data_policies_dict(self):
+        """WORM policies carry their retention settings and member list."""
+        policy = Mock(
+            spec=[
+                "name",
+                "enabled",
+                "is_local",
+                "mode",
+                "retention_lock",
+                "default_retention",
+                "min_retention",
+                "max_retention",
+            ]
+        )
+        policy.name = "worm1"
+        policy.enabled = True
+        policy.is_local = True
+        policy.mode = "compliance"
+        policy.retention_lock = "unlocked"
+        policy.default_retention = 86400000
+        policy.min_retention = 60000
+        policy.max_retention = 172800000
+        member_ref = Mock(spec=["name"])
+        member_ref.name = "fs1"
+        policy_ref = Mock(spec=["name"])
+        policy_ref.name = "worm1"
+        member = Mock(spec=["member", "policy"])
+        member.member = member_ref
+        member.policy = policy_ref
+
+        mock_blade = Mock()
+        mock_blade.get_worm_data_policies.return_value.items = [policy]
+        mock_blade.get_worm_data_policies_members.return_value.items = [member]
+
+        result = generate_worm_data_policies_dict(mock_blade)
+
+        assert result["worm1"]["mode"] == "compliance"
+        assert result["worm1"]["default_retention"] == 86400000
+        assert result["worm1"]["members"] == ["fs1"]
+
+    def test_generate_tls_policies_dict(self):
+        """TLS policies carry their settings and attached interfaces."""
+        cert = Mock(spec=["name"])
+        cert.name = "management"
+        policy = Mock(
+            spec=[
+                "name",
+                "enabled",
+                "is_local",
+                "appliance_certificate",
+                "min_tls_version",
+                "enabled_tls_ciphers",
+                "disabled_tls_ciphers",
+                "client_certificates_required",
+                "verify_client_certificate_trust",
+                "trusted_client_certificate_authority",
+            ]
+        )
+        policy.name = "tls1"
+        policy.enabled = True
+        policy.is_local = True
+        policy.appliance_certificate = cert
+        policy.min_tls_version = "1.2"
+        policy.enabled_tls_ciphers = None
+        policy.disabled_tls_ciphers = ["RC4"]
+        policy.client_certificates_required = False
+        policy.verify_client_certificate_trust = False
+        policy.trusted_client_certificate_authority = None
+        iface_ref = Mock(spec=["name"])
+        iface_ref.name = "vip1"
+        policy_ref = Mock(spec=["name"])
+        policy_ref.name = "tls1"
+        member = Mock(spec=["member", "policy"])
+        member.member = iface_ref
+        member.policy = policy_ref
+
+        mock_blade = Mock()
+        mock_blade.get_tls_policies.return_value.items = [policy]
+        mock_blade.get_tls_policies_network_interfaces.return_value.items = [member]
+
+        result = generate_tls_policies_dict(mock_blade)
+
+        assert result["tls1"]["appliance_certificate"] == "management"
+        assert result["tls1"]["min_tls_version"] == "1.2"
+        assert result["tls1"]["disabled_tls_ciphers"] == ["RC4"]
+        assert result["tls1"]["trusted_client_certificate_authority"] is None
+        assert result["tls1"]["network_interfaces"] == ["vip1"]
+
+    def test_generate_s3_export_policies_dict(self):
+        """S3 export policies are reported with their inline rules."""
+        rule = Mock(spec=["name", "actions", "effect", "resources"])
+        rule.name = "s3exp/rule1"
+        rule.actions = ["s3:*"]
+        rule.effect = "allow"
+        rule.resources = ["*"]
+        policy = Mock(spec=["name", "enabled", "is_local", "rules"])
+        policy.name = "s3exp"
+        policy.enabled = True
+        policy.is_local = True
+        policy.rules = [rule]
+
+        mock_blade = Mock()
+        mock_blade.get_s3_export_policies.return_value.items = [policy]
+
+        result = generate_s3_export_policies_dict(mock_blade)
+
+        assert result["s3exp"]["rules"] == [
+            {
+                "name": "s3exp/rule1",
+                "actions": ["s3:*"],
+                "effect": "allow",
+                "resources": ["*"],
+            }
+        ]
+
+    def test_generate_object_store_account_exports_dict(self):
+        """Account exports report account, policy and server by name."""
+        account = Mock(spec=["name"])
+        account.name = "acc1"
+        policy = Mock(spec=["name"])
+        policy.name = "s3exp"
+        server = Mock(spec=["name"])
+        server.name = "_array_server"
+        export = Mock(spec=["name", "enabled", "member", "policy", "server"])
+        export.name = "acc1-export"
+        export.enabled = True
+        export.member = account
+        export.policy = policy
+        export.server = server
+
+        mock_blade = Mock()
+        mock_blade.get_object_store_account_exports.return_value.items = [export]
+
+        result = generate_object_store_account_exports_dict(mock_blade)
+
+        assert result == {
+            "acc1-export": {
+                "enabled": True,
+                "account": "acc1",
+                "policy": "s3exp",
+                "server": "_array_server",
+            }
+        }
+
+    def test_generate_object_store_virtual_hosts_dict(self):
+        """Virtual hosts report hostname and attached servers; before REST
+        2.20 the name is the hostname."""
+        server = Mock(spec=["name"])
+        server.name = "_array_server"
+        new_vhost = Mock(spec=["name", "hostname", "attached_servers"])
+        new_vhost.name = "vh1"
+        new_vhost.hostname = "s3.example.com"
+        new_vhost.attached_servers = [server]
+        old_vhost = Mock(spec=["name"])
+        old_vhost.name = "s3.old.example.com"
+
+        mock_blade = Mock()
+        mock_blade.get_object_store_virtual_hosts.return_value.items = [
+            new_vhost,
+            old_vhost,
+        ]
+
+        result = generate_object_store_virtual_hosts_dict(mock_blade)
+
+        assert result["vh1"] == {
+            "hostname": "s3.example.com",
+            "attached_servers": ["_array_server"],
+        }
+        assert result["s3.old.example.com"] == {
+            "hostname": "s3.old.example.com",
+            "attached_servers": [],
+        }
+
+    def test_generate_realms_and_resource_accesses(self):
+        """Realms report their space and TLS policy; resource accesses map a
+        scope to a resource by name and type."""
+        space = Mock(spec=["total_physical", "virtual"])
+        space.total_physical = 1024
+        space.virtual = 2048
+        tls = Mock(spec=["name"])
+        tls.name = "tls1"
+        realm = Mock(
+            spec=[
+                "name",
+                "created",
+                "destroyed",
+                "time_remaining",
+                "default_inbound_tls_policy",
+                "space",
+            ]
+        )
+        realm.name = "realm1"
+        realm.created = 1700000000000
+        realm.destroyed = False
+        realm.time_remaining = None
+        realm.default_inbound_tls_policy = tls
+        realm.space = space
+
+        mock_blade = Mock()
+        mock_blade.get_realms.return_value.items = [realm]
+
+        result = generate_realms_dict(mock_blade)
+
+        assert result["realm1"]["destroyed"] is False
+        assert result["realm1"]["created"] is not None
+        assert result["realm1"]["default_inbound_tls_policy"] == "tls1"
+        assert result["realm1"]["space"]["total_physical"] == 1024
+        assert result["realm1"]["space"]["virtual"] == 2048
+        # fields absent from this Space version are reported as null
+        assert result["realm1"]["space"]["total_used"] is None
+
+        resource = Mock(spec=["name", "resource_type"])
+        resource.name = "data-subnet"
+        resource.resource_type = "subnets"
+        scope = Mock(spec=["name", "resource_type"])
+        scope.name = "realm1"
+        scope.resource_type = "realms"
+        access = Mock(spec=["id", "resource", "scope"])
+        access.id = "abc"
+        access.resource = resource
+        access.scope = scope
+        mock_blade.get_resource_accesses.return_value.items = [access]
+
+        result = generate_resource_accesses_dict(mock_blade)
+
+        assert result == [
+            {
+                "id": "abc",
+                "resource": "data-subnet",
+                "resource_type": "subnets",
+                "scope": "realm1",
+                "scope_type": "realms",
+            }
+        ]

@@ -671,7 +671,7 @@ class TestPurefbCerts:
 
             # Verify file was written
             mock_open.assert_called_once_with("test_csr.pem", "w", encoding="utf-8")
-            mock_file.writelines.assert_called_once()
+            mock_file.write.assert_called_once()
 
         # Verify exit_json was called with changed=True
         mock_module.exit_json.assert_called_once()
@@ -1040,6 +1040,11 @@ class TestPurefbCerts:
 
         # Certificate exists
         mock_blade.get_certificates.return_value.status_code = 200
+        mock_cert = Mock()
+        mock_cert.certificate = "old_cert_content"
+        mock_cert.intermediate_certificate = None
+        mock_cert.subject_alternative_names = []
+        mock_blade.get_certificates.return_value.items = [mock_cert]
 
         # Mock successful patch
         mock_patch_response = Mock()
@@ -1069,6 +1074,7 @@ class TestPurefbCerts:
         call_args = mock_module.exit_json.call_args[1]
         assert call_args["changed"] is True
 
+    @patch("plugins.modules.purefb_certs.CertificatePatch")
     @patch("plugins.modules.purefb_certs.pycountry")
     @patch("plugins.modules.purefb_certs.LooseVersion")
     @patch("plugins.modules.purefb_certs.get_system")
@@ -1076,7 +1082,12 @@ class TestPurefbCerts:
     @patch("plugins.modules.purefb_certs.HAS_PYPURECLIENT", True)
     @patch("plugins.modules.purefb_certs.HAS_PYCOUNTRY", True)
     def test_main_update_cert_new_api(
-        self, mock_ansible_module, mock_get_system, mock_loose_version, mock_pycountry
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_loose_version,
+        mock_pycountry,
+        mock_certificate_patch,
     ):
         """Test update_cert with new API version (>= 2.20)"""
         # Setup mock module
@@ -1117,6 +1128,11 @@ class TestPurefbCerts:
 
         # Certificate exists
         mock_blade.get_certificates.return_value.status_code = 200
+        mock_cert = Mock()
+        mock_cert.certificate = "old_cert_content"
+        mock_cert.intermediate_certificate = None
+        mock_cert.subject_alternative_names = []
+        mock_blade.get_certificates.return_value.items = [mock_cert]
 
         # Mock successful patch
         mock_patch_response = Mock()
@@ -1143,7 +1159,10 @@ class TestPurefbCerts:
         assert "names" in call_args[1]
         assert "certificate" in call_args[1]
         assert "generate_new_key" in call_args[1]
-        assert call_args[1]["generate_new_key"] == "True"
+        assert call_args[1]["generate_new_key"] is True
+        # key parameters only travel together with generate_new_key
+        mock_certificate_patch.assert_called_once()
+        assert mock_certificate_patch.call_args[1]["key_size"] == 2048
 
         # Verify exit_json was called with changed=True
         mock_module.exit_json.assert_called_once()
@@ -1198,6 +1217,11 @@ class TestPurefbCerts:
 
         # Certificate exists
         mock_blade.get_certificates.return_value.status_code = 200
+        mock_cert = Mock()
+        mock_cert.certificate = "old_cert_content"
+        mock_cert.intermediate_certificate = None
+        mock_cert.subject_alternative_names = []
+        mock_blade.get_certificates.return_value.items = [mock_cert]
 
         # Mock failed patch
         mock_patch_response = Mock()
@@ -1272,6 +1296,11 @@ class TestPurefbCerts:
 
         # Certificate exists
         mock_blade.get_certificates.return_value.status_code = 200
+        mock_cert = Mock()
+        mock_cert.certificate = "old_cert_content"
+        mock_cert.intermediate_certificate = None
+        mock_cert.subject_alternative_names = []
+        mock_blade.get_certificates.return_value.items = [mock_cert]
 
         # Mock failed patch
         mock_patch_response = Mock()
@@ -1571,3 +1600,207 @@ class TestPurefbCerts:
         mock_module.exit_json.assert_called_once()
         call_args = mock_module.exit_json.call_args[1]
         assert call_args["changed"] is True
+
+    @patch("plugins.modules.purefb_certs.pycountry")
+    @patch("plugins.modules.purefb_certs.LooseVersion")
+    @patch("plugins.modules.purefb_certs.get_system")
+    @patch("plugins.modules.purefb_certs.AnsibleModule")
+    @patch("plugins.modules.purefb_certs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_certs.HAS_PYCOUNTRY", True)
+    def test_main_update_cert_unchanged_is_noop(
+        self, mock_ansible_module, mock_get_system, mock_loose_version, mock_pycountry
+    ):
+        """Test re-declaring an existing self-signed certificate with the same
+        attributes reports no change and sends no PATCH"""
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "state": "present",
+            "name": "existing-cert",
+            "export_file": None,
+            "common_name": "test.example.com",
+            "country": "US",
+            "province": "CA",
+            "locality": "SF",
+            "organization": "Test Org",
+            "org_unit": "IT",
+            "email": "test@example.com",
+            "key_size": 2048,
+            "certificate": None,
+            "intermediate_cert": None,
+            "key": None,
+            "passphrase": None,
+            "generate": False,
+            "days": 30,
+            "key_algorithm": None,
+            "certificate_type": "array",
+            "subject_alternative_names": ["test.example.com"],
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.21"]
+        mock_loose_version.return_value.__le__ = Mock(return_value=True)
+
+        mock_cert = Mock()
+        mock_cert.certificate = (
+            "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"
+        )
+        mock_cert.intermediate_certificate = None
+        mock_cert.common_name = "test.example.com"
+        mock_cert.country = "US"
+        mock_cert.state = "CA"
+        mock_cert.locality = "SF"
+        mock_cert.organization = "Test Org"
+        mock_cert.organizational_unit = "IT"
+        mock_cert.email = "test@example.com"
+        mock_cert.key_size = 2048
+        mock_cert.key_algorithm = "rsa"
+        mock_cert.subject_alternative_names = ["test.example.com"]
+        mock_blade.get_certificates.return_value.status_code = 200
+        mock_blade.get_certificates.return_value.items = [mock_cert]
+
+        mock_get_system.return_value = mock_blade
+        mock_pycountry.countries.get.return_value = Mock()
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_blade.patch_certificates.assert_not_called()
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefb_certs.pycountry")
+    @patch("plugins.modules.purefb_certs.LooseVersion")
+    @patch("plugins.modules.purefb_certs.get_system")
+    @patch("plugins.modules.purefb_certs.AnsibleModule")
+    @patch("plugins.modules.purefb_certs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_certs.HAS_PYCOUNTRY", True)
+    def test_main_update_cert_key_size_change_requires_generate(
+        self, mock_ansible_module, mock_get_system, mock_loose_version, mock_pycountry
+    ):
+        """Test a different key_size without generate=true fails before any PATCH"""
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "state": "present",
+            "name": "existing-cert",
+            "export_file": None,
+            "common_name": None,
+            "country": None,
+            "province": None,
+            "locality": None,
+            "organization": None,
+            "org_unit": None,
+            "email": None,
+            "key_size": 4096,
+            "certificate": None,
+            "intermediate_cert": None,
+            "key": None,
+            "passphrase": None,
+            "generate": False,
+            "days": None,
+            "key_algorithm": None,
+            "certificate_type": "array",
+            "subject_alternative_names": None,
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.21"]
+        mock_loose_version.return_value.__le__ = Mock(return_value=True)
+
+        mock_cert = Mock()
+        mock_cert.key_size = 2048
+        mock_blade.get_certificates.return_value.status_code = 200
+        mock_blade.get_certificates.return_value.items = [mock_cert]
+
+        mock_get_system.return_value = mock_blade
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_blade.patch_certificates.assert_not_called()
+        mock_module.fail_json.assert_called_once()
+        msg = mock_module.fail_json.call_args[1]["msg"]
+        assert "key_size" in msg
+        assert "generate: true" in msg
+
+    @patch("plugins.modules.purefb_certs.CertificatePatch")
+    @patch("plugins.modules.purefb_certs.pycountry")
+    @patch("plugins.modules.purefb_certs.LooseVersion")
+    @patch("plugins.modules.purefb_certs.get_system")
+    @patch("plugins.modules.purefb_certs.AnsibleModule")
+    @patch("plugins.modules.purefb_certs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_certs.HAS_PYCOUNTRY", True)
+    def test_main_update_cert_generate_regenerates_key(
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_loose_version,
+        mock_pycountry,
+        mock_certificate_patch,
+    ):
+        """Test generate=true alone re-keys the certificate with generate_new_key=True"""
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "state": "present",
+            "name": "existing-cert",
+            "export_file": None,
+            "common_name": None,
+            "country": None,
+            "province": None,
+            "locality": None,
+            "organization": None,
+            "org_unit": None,
+            "email": None,
+            "key_size": 4096,
+            "certificate": None,
+            "intermediate_cert": None,
+            "key": None,
+            "passphrase": None,
+            "generate": True,
+            "days": None,
+            "key_algorithm": None,
+            "certificate_type": "array",
+            "subject_alternative_names": None,
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.21"]
+        mock_loose_version.return_value.__le__ = Mock(return_value=True)
+
+        mock_cert = Mock()
+        mock_cert.key_size = 2048
+        mock_blade.get_certificates.return_value.status_code = 200
+        mock_blade.get_certificates.return_value.items = [mock_cert]
+
+        mock_patch_response = Mock()
+        mock_patch_response.status_code = 200
+        mock_blade.patch_certificates.return_value = mock_patch_response
+
+        mock_get_system.return_value = mock_blade
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_blade.patch_certificates.assert_called_once()
+        assert mock_blade.patch_certificates.call_args[1]["generate_new_key"] is True
+        assert mock_certificate_patch.call_args[1]["key_size"] == 4096
+        mock_module.exit_json.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True

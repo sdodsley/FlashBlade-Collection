@@ -134,6 +134,9 @@ options:
     - Generate a new private key.
     - If not selected, the certificate will use the existing key
     - Required when changing key-size or key-algorithm
+    - On an existing certificate I(state=present) only re-issues the
+      certificate when a requested attribute differs from the one on the
+      array, or when this option is C(true); otherwise nothing changes.
   subject_alternative_names:
     type: list
     elements: str
@@ -237,36 +240,120 @@ CERT_TYPE_VERSION = "2.15"
 CSR_API_VERSION = "2.20"
 
 
+# module option -> attribute of the Certificate object returned by the array
+SUBJECT_FIELDS = {
+    "common_name": "common_name",
+    "country": "country",
+    "email": "email",
+    "locality": "locality",
+    "organization": "organization",
+    "org_unit": "organizational_unit",
+    "province": "state",
+}
+KEY_FIELDS = {
+    "key_size": "key_size",
+    "key_algorithm": "key_algorithm",
+}
+
+
+def _text_differs(requested, current):
+    """Compare PEM text ignoring surrounding whitespace"""
+    return (requested or "").strip() != (current or "").strip()
+
+
+def get_cert(module, blade):
+    """Return the existing certificate object"""
+    res = blade.get_certificates(names=[module.params["name"]])
+    if res.status_code != 200:
+        module.fail_json(
+            msg="Failed to read SSL certificate {0}. Error: {1}".format(
+                module.params["name"], get_error_message(res)
+            )
+        )
+    return list(res.items)[0]
+
+
+def cert_changes(module, current):
+    """Return the names of the options whose requested value differs
+    from the existing certificate.
+
+    Options that were not given (None) are never a difference. ``days``
+    cannot be read back from the array so it never triggers a change on
+    its own; it is only sent along with a regeneration.
+    """
+    changes = []
+    if module.params["certificate"] is not None and _text_differs(
+        module.params["certificate"], getattr(current, "certificate", None)
+    ):
+        changes.append("certificate")
+    if module.params["intermediate_cert"] is not None and _text_differs(
+        module.params["intermediate_cert"],
+        getattr(current, "intermediate_certificate", None),
+    ):
+        changes.append("intermediate_cert")
+    for option, attribute in SUBJECT_FIELDS.items():
+        if module.params[option] is not None and module.params[option] != getattr(
+            current, attribute, None
+        ):
+            changes.append(option)
+    for option, attribute in KEY_FIELDS.items():
+        if module.params[option] is not None and module.params[option] != getattr(
+            current, attribute, None
+        ):
+            changes.append(option)
+    if module.params["subject_alternative_names"] is not None:
+        current_sans = getattr(current, "subject_alternative_names", None) or []
+        if sorted(module.params["subject_alternative_names"]) != sorted(current_sans):
+            changes.append("subject_alternative_names")
+    return changes
+
+
 def update_cert(module, blade):
-    """Update existing SSL Certificate"""
+    """Update existing SSL Certificate
+
+    Only patch when a requested attribute differs from the certificate on
+    the array, or when ``generate`` asks for a new private key. The key
+    parameters (``key_size``, ``key_algorithm``) are only ever sent together
+    with ``generate_new_key=true`` because the array rejects them otherwise.
+    """
     api_versions = get_rest_api_version(blade)
+    current = get_cert(module, blade)
+    changes = cert_changes(module, current)
+    generate = bool(module.params["generate"])
 
     if LooseVersion(CSR_API_VERSION) <= LooseVersion(api_versions):
-        changed = True
-        certificate = CertificatePatch(
-            certificate=module.params["certificate"],
-            intermediate_certificate=module.params["intermediate_cert"],
-            private_key=module.params["key"],
-            passphrase=module.params["passphrase"],
-            common_name=module.params["common_name"],
-            country=module.params["country"],
-            email=module.params["email"],
-            key_size=module.params["key_size"],
-            locality=module.params["locality"],
-            organization=module.params["organization"],
-            organizational_unit=module.params["org_unit"],
-            state=module.params["province"],
-            days=module.params["days"],
-            subject_alternative_names=module.params["subject_alternative_names"],
-        )
-        if not module.check_mode:
-            generate = None
-            if module.params["generate"]:
-                generate = "True"
+        key_changes = [option for option in changes if option in KEY_FIELDS]
+        if key_changes and not generate:
+            module.fail_json(
+                msg=(
+                    "{0} differ(s) from the existing certificate {1}. "
+                    "Set generate: true to regenerate the private key."
+                ).format(", ".join(key_changes), module.params["name"])
+            )
+        changed = bool(changes or generate)
+        if changed and not module.check_mode:
+            patch_kwargs = dict(
+                certificate=module.params["certificate"],
+                intermediate_certificate=module.params["intermediate_cert"],
+                private_key=module.params["key"],
+                passphrase=module.params["passphrase"],
+                common_name=module.params["common_name"],
+                country=module.params["country"],
+                email=module.params["email"],
+                locality=module.params["locality"],
+                organization=module.params["organization"],
+                organizational_unit=module.params["org_unit"],
+                state=module.params["province"],
+                days=module.params["days"],
+                subject_alternative_names=module.params["subject_alternative_names"],
+            )
+            if generate:
+                patch_kwargs["key_size"] = module.params["key_size"]
+                patch_kwargs["key_algorithm"] = module.params["key_algorithm"]
             res = blade.patch_certificates(
                 names=[module.params["name"]],
-                generate_new_key=generate,
-                certificate=certificate,
+                generate_new_key=True if generate else None,
+                certificate=CertificatePatch(**patch_kwargs),
             )
             if res.status_code != 200:
                 module.fail_json(
@@ -276,14 +363,14 @@ def update_cert(module, blade):
                     )
                 )
     else:
-        changed = True
-        certificate = CertificatePatch(
-            certificate=module.params["certificate"],
-            intermediate_certificate=module.params["intermediate_cert"],
-            private_key=module.params["key"],
-            passphrase=module.params["passphrase"],
-        )
-        if not module.check_mode:
+        changed = bool("certificate" in changes or "intermediate_cert" in changes)
+        if changed and not module.check_mode:
+            certificate = CertificatePatch(
+                certificate=module.params["certificate"],
+                intermediate_certificate=module.params["intermediate_cert"],
+                private_key=module.params["key"],
+                passphrase=module.params["passphrase"],
+            )
             res = blade.patch_certificates(
                 names=[module.params["name"]], certificate=certificate
             )
@@ -311,6 +398,7 @@ def create_cert(module, blade):
             country=module.params["country"],
             email=module.params["email"],
             key_size=module.params["key_size"],
+            key_algorithm=module.params["key_algorithm"],
             locality=module.params["locality"],
             organization=module.params["organization"],
             organizational_unit=module.params["org_unit"],
@@ -404,7 +492,7 @@ def create_csr(module, blade):
             ).items
         )[0].certificate_signing_request
         with open(module.params["export_file"], "w", encoding="utf-8") as csr_file:
-            csr_file.writelines(list(csr))
+            csr_file.write(csr)
     module.exit_json(changed=changed)
 
 

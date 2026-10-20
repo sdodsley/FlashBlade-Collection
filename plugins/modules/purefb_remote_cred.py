@@ -22,7 +22,9 @@ short_description: Create, modify and delete FlashBlade object store remote cred
 description:
 - Create, modify and delete object store remote credentials
 - You must have a correctly configured remote array or target
-- This module is B(not) idempotent when updating existing remote credentials
+- The secret access key cannot be read back from the array, so an existing
+  credential is only updated when I(access_key) differs from the configured
+  access key ID, or when I(force) is set.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -50,6 +52,16 @@ options:
     - Define whether to initialize the S3 bucket
     required: true
     type: str
+  force:
+    description:
+    - Re-send I(access_key) and I(secret) to an existing credential even
+      when the access key ID is unchanged.
+    - Required to rotate the secret of a credential whose access key ID
+      stays the same, because the array never returns the current secret.
+    - Always reports a change when set.
+    type: bool
+    default: false
+    version_added: "1.29.0"
   context:
     description:
     - Name of fleet member on which to perform the operation.
@@ -206,11 +218,20 @@ def create_credential(module, blade):
     module.exit_json(changed=changed)
 
 
-def update_credential(module, blade):
-    """Update remote credential"""
-    changed = True
+def update_credential(module, blade, current_cred):
+    """Update remote credential
+
+    The secret cannot be read back, so a change is only detected through
+    the access key ID unless the caller forces a re-send.
+    """
+    changed = False
     api_version = get_rest_api_version(blade)
-    if not module.check_mode:
+    if (
+        module.params["force"]
+        or getattr(current_cred, "access_key_id", None) != module.params["access_key"]
+    ):
+        changed = True
+    if changed and not module.check_mode:
         remote_cred = module.params["target"] + "/" + module.params["name"]
         new_attr = ObjectStoreRemoteCredentials(
             access_key_id=module.params["access_key"],
@@ -271,6 +292,7 @@ def main():
             access_key=dict(type="str", no_log=False),
             secret=dict(type="str", no_log=True),
             target=dict(type="str", required=True),
+            force=dict(type="bool", default=False),
             context=dict(type="str", default=""),
         )
     )
@@ -306,7 +328,7 @@ def main():
     if module.params["state"] == "present" and not remote_cred:
         create_credential(module, blade)
     elif module.params["state"] == "present":
-        update_credential(module, blade)
+        update_credential(module, blade, remote_cred)
     elif module.params["state"] == "absent" and remote_cred:
         delete_credential(module, blade)
 

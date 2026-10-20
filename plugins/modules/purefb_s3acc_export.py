@@ -260,8 +260,13 @@ def main():
         )
 
     if not module.params["context"]:
-        # If no context is provided set the context to the local array name
-        module.params["context"] = list(blade.get_arrays().items)[0].name
+        # Only default the context to the local array name when this array is a
+        # member of a fleet. A standalone array rejects any fleet context
+        # ("Cannot find array in fleet: not in a fleet"), so leave context
+        # unset - no context_names is then sent.
+        fleet_res = blade.get_fleets()
+        if fleet_res.status_code == 200 and list(fleet_res.items):
+            module.params["context"] = list(blade.get_arrays().items)[0].name
 
     state = module.params["state"]
     export = _get_export(module, blade)

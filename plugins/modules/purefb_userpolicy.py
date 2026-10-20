@@ -275,45 +275,45 @@ def remove_policy(module, blade):
 
 def list_policy(module, blade):
     """List Object Store User Access Policies"""
-    changed = True
+    # Listing is read-only: it never changes the array, in or out of check mode.
+    changed = False
     api_version = get_rest_api_version(blade)
     policy_list = []
-    if not module.check_mode:
-        if module.params["account"] and module.params["name"]:
-            username = module.params["account"] + "/" + module.params["name"]
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["context"]
-            ):
-                user_policies = list(
-                    blade.get_object_store_access_policies_object_store_users(
-                        member_names=[username],
-                        context_names=[module.params["context"]],
-                    ).items
-                )
-            else:
-                user_policies = list(
-                    blade.get_object_store_access_policies_object_store_users(
-                        member_names=[username]
-                    ).items
-                )
-            for user_policy in user_policies:
-                policy_list.append(user_policy.policy.name)
+    if module.params["account"] and module.params["name"]:
+        username = module.params["account"] + "/" + module.params["name"]
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
+            res = blade.get_object_store_access_policies_object_store_users(
+                member_names=[username],
+                context_names=[module.params["context"]],
+            )
         else:
-            if (
-                LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["context"]
-            ):
-                policies = blade.get_object_store_access_policies(
-                    context_names=[module.params["context"]]
-                )
-            else:
-                policies = blade.get_object_store_access_policies()
-            p_list = list(policies.items)
-            if policies.status_code != 200:
-                module.fail_json(msg="Failed to get Object Store User Access Policies")
-            for policy in p_list:
-                policy_list.append(policy.name)
+            res = blade.get_object_store_access_policies_object_store_users(
+                member_names=[username]
+            )
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to get access policies for account user {0}. "
+                "Error: {1}".format(username, get_error_message(res))
+            )
+        for user_policy in list(res.items):
+            policy_list.append(user_policy.policy.name)
+    else:
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
+            policies = blade.get_object_store_access_policies(
+                context_names=[module.params["context"]]
+            )
+        else:
+            policies = blade.get_object_store_access_policies()
+        if policies.status_code != 200:
+            module.fail_json(msg="Failed to get Object Store User Access Policies")
+        for policy in list(policies.items):
+            policy_list.append(policy.name)
     module.exit_json(changed=changed, policy_list=policy_list)
 
 
@@ -350,18 +350,21 @@ def main():
             module.params["context"] = list(blade.get_arrays().items)[0].name
 
     state = module.params["state"]
-    if (
-        blade.get_object_store_users(
-            names=[module.params["account"] + "/" + module.params["name"]]
-        ).status_code
-        != 200
-        and state != "show"
-    ):
-        module.fail_json(
-            msg="Account User {0}/{1} does not exist".format(
-                module.params["account"], module.params["name"]
+    # state=show without account/name lists every policy on the array, so the
+    # user lookup (and its name concatenation) must only run when a user is named.
+    if module.params["account"] and module.params["name"]:
+        username = module.params["account"] + "/" + module.params["name"]
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
+            user_res = blade.get_object_store_users(
+                names=[username], context_names=[module.params["context"]]
             )
-        )
+        else:
+            user_res = blade.get_object_store_users(names=[username])
+        if user_res.status_code != 200:
+            module.fail_json(msg="Account User {0} does not exist".format(username))
     if state == "show":
         list_policy(module, blade)
     elif state == "present":

@@ -149,12 +149,8 @@ def update_connection(module, blade, connection):
     if module.params["address"] != connection.address:
         changed = True
         if not module.check_mode:
-            new_address = Target(
-                name=module.params["name"], address=module.params["address"]
-            )
-            res = blade.targets.update_targets(
-                names=[connection.name], target=new_address
-            )
+            new_address = Target(address=module.params["address"])
+            res = blade.patch_targets(names=[connection.name], target=new_address)
             if res.status_code != 200:
                 module.fail_json(
                     msg="Failed to change address for target {0}. Error: {1}".format(

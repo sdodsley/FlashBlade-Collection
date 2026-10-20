@@ -75,9 +75,10 @@ options:
   smb:
     description:
       - Define whether to SMB protocol is enabled for the filesystem.
+      - Defaults to C(false) when the filesystem is created. On an existing
+        filesystem the protocol is only changed when this option is set.
     required: false
     type: bool
-    default: false
   smb_aclmode:
     description:
       - Specify the ACL mode for the SMB protocol.
@@ -89,15 +90,17 @@ options:
   http:
     description:
       - Define whether to HTTP/HTTPS protocol is enabled for the filesystem.
+      - Defaults to C(false) when the filesystem is created. On an existing
+        filesystem the protocol is only changed when this option is set.
     required: false
     type: bool
-    default: false
   snapshot:
     description:
       - Define whether a snapshot directory is enabled for the filesystem.
+      - Defaults to C(false) when the filesystem is created. On an existing
+        filesystem the setting is only changed when this option is set.
     required: false
     type: bool
-    default: false
   writable:
     description:
       - Define if a filesystem is writable.
@@ -112,17 +115,19 @@ options:
   fastremove:
     description:
       - Define whether the fast remove directory is enabled for the filesystem.
+      - Defaults to C(false) when the filesystem is created. On an existing
+        filesystem the setting is only changed when this option is set.
     required: false
     type: bool
-    default: false
   hard_limit:
     description:
       - Define whether the capacity for a filesystem is a hard limit.
       - CAUTION This will cause the filesystem to go Read-Only if the
         capacity has already exceeded the logical size of the filesystem.
+      - Defaults to C(false) when the filesystem is created. On an existing
+        filesystem the setting is only changed when this option is set.
     required: false
     type: bool
-    default: false
   user_quota:
     description:
       - Default quota in M, G, T or P units for a user under this file system.
@@ -169,8 +174,9 @@ options:
       - Safeguards ACLs on a filesystem.
       - Performs different roles depending on the filesystem protocol enabled.
       - See Purity//FB documentation for detailed description.
+      - Defaults to C(true) when the filesystem is created. On an existing
+        filesystem the setting is only changed when this option is set.
     type: bool
-    default: true
   export_policy:
     description:
     - Name of NFS export policy to assign to filesystem.
@@ -426,11 +432,34 @@ CONTEXT_API_VERSION = "2.17"
 REALM_API_VERSION = "2.19"
 
 
+def _item_count(res):
+    """Return the number of items in a successful SDK response.
+
+    A membership GET returns 200 with an empty item list when nothing
+    matches, so the status code alone does not say whether a member exists.
+    """
+    if getattr(res, "status_code", None) != 200:
+        return 0
+    count = getattr(res, "total_item_count", None)
+    if isinstance(count, int):
+        return count
+    try:
+        return len(list(res.items))
+    except TypeError:
+        return 0
+
+
 def create_fs(module, blade):
     """Create Filesystem"""
     changed = True
     api_version = get_rest_api_version(blade)
     if not module.check_mode:
+        # Boolean flags default to None so that modify_fs only touches them
+        # when the caller sets them. At creation time None means the array
+        # default (safeguard_acls on, every other flag off).
+        safeguard_acls = module.params["safeguard_acls"]
+        if safeguard_acls is None:
+            safeguard_acls = True
         # Determine realm from either realm parameter or name prefix (realm::fs)
         realm_name = None
         if module.params.get("realm"):
@@ -477,7 +506,7 @@ def create_fs(module, blade):
             module.fail_json(
                 msg="Cannot set access_control to smb or independent when SMB is not enabled."
             )
-        if module.params["safeguard_acls"] and (
+        if safeguard_acls and (
             module.params["access_control"] in ["mode-bits", "independent"]
         ):
             module.fail_json(
@@ -542,14 +571,14 @@ def create_fs(module, blade):
         # Build FileSystemPost object
         fs_obj = FileSystemPost(
             provisioned=size,
-            fast_remove_directory_enabled=module.params["fastremove"],
-            hard_limit_enabled=module.params["hard_limit"],
-            snapshot_directory_enabled=module.params["snapshot"],
+            fast_remove_directory_enabled=bool(module.params["fastremove"]),
+            hard_limit_enabled=bool(module.params["hard_limit"]),
+            snapshot_directory_enabled=bool(module.params["snapshot"]),
             nfs=Nfs(**nfs_kwargs),
-            smb=SmbPost(enabled=module.params["smb"]),
-            http=Http(enabled=module.params["http"]),
+            smb=SmbPost(enabled=bool(module.params["smb"])),
+            http=Http(enabled=bool(module.params["http"])),
             multi_protocol=MultiProtocolPost(
-                safeguard_acls=module.params["safeguard_acls"],
+                safeguard_acls=safeguard_acls,
                 access_control_style=module.params["access_control"],
             ),
             default_user_quota=user_quota,
@@ -739,48 +768,54 @@ def create_fs(module, blade):
                             get_error_message(res),
                         )
                     )
-            if (
-                LooseVersion(GOWNER_API_VERSION) <= LooseVersion(api_version)
-                and module.params["group_ownership"]
-            ):
-                go_attr = FileSystemPatch(
-                    group_ownership=module.params["group_ownership"]
-                )
-                if (
-                    LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                    and module.params["context"]
-                ):
-                    res = blade.patch_file_systems(
-                        names=[fs_name],
-                        file_system=go_attr,
-                        context_names=[module.params["context"]],
-                    )
-                else:
-                    res = blade.patch_file_systems(names=[fs_name], file_system=go_attr)
-                if res.status_code != 200:
-                    module.fail_json(
-                        msg="Filesystem {0} created, but failed to set group ownership. "
-                        "Error: {1}".format(
-                            fs_name,
-                            get_error_message(res),
-                        )
-                    )
+        # group_ownership and storage_class are not SMB attributes, so they
+        # are applied whether or not SMB is enabled.
+        if (
+            LooseVersion(GOWNER_API_VERSION) <= LooseVersion(api_version)
+            and module.params["group_ownership"]
+        ):
+            go_attr = FileSystemPatch(group_ownership=module.params["group_ownership"])
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-                and module.params["storage_class"]
+                and module.params["context"]
             ):
-                sc_patch = {
-                    "names": [fs_name],
-                    "file_system": FileSystemPatch(
-                        storage_class=StorageClassInfo(
-                            name=module.params["storage_class"]
-                        )
-                    ),
-                    "cancel_in_progress_storage_class_transition": False,
-                }
-                if module.params["context"]:
-                    sc_patch["context_names"] = [module.params["context"]]
-                res = blade.patch_file_systems(**sc_patch)
+                res = blade.patch_file_systems(
+                    names=[fs_name],
+                    file_system=go_attr,
+                    context_names=[module.params["context"]],
+                )
+            else:
+                res = blade.patch_file_systems(names=[fs_name], file_system=go_attr)
+            if res.status_code != 200:
+                module.fail_json(
+                    msg="Filesystem {0} created, but failed to set group ownership. "
+                    "Error: {1}".format(
+                        fs_name,
+                        get_error_message(res),
+                    )
+                )
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["storage_class"]
+        ):
+            sc_patch = {
+                "names": [fs_name],
+                "file_system": FileSystemPatch(
+                    storage_class=StorageClassInfo(name=module.params["storage_class"])
+                ),
+                "cancel_in_progress_storage_class_transition": False,
+            }
+            if module.params["context"]:
+                sc_patch["context_names"] = [module.params["context"]]
+            res = blade.patch_file_systems(**sc_patch)
+            if res.status_code != 200:
+                module.fail_json(
+                    msg="Filesystem {0} created, but failed to set storage class. "
+                    "Error: {1}".format(
+                        fs_name,
+                        get_error_message(res),
+                    )
+                )
 
     module.exit_json(changed=changed)
 
@@ -836,7 +871,7 @@ def modify_fs(module, blade):
                 policy_names=[module.params["policy"]],
                 member_names=[fs_name],
             )
-        if res.status_code != 200 or getattr(res, "total_item_count", 0) == 0:
+        if not _item_count(res):
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
                 and module.params["context"]
@@ -886,7 +921,9 @@ def modify_fs(module, blade):
                     policy_names=[module.params["policy"]],
                     member_names=[fs_name],
                 )
-            if res.status_code == 200:
+            # A 200 with no items means the policy is not attached, so a
+            # second policy_state=absent run must be a no-op.
+            if _item_count(res):
                 if (
                     LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
                     and module.params["context"]
@@ -954,21 +991,20 @@ def modify_fs(module, blade):
     if module.params["group_quota"] and group_quota != fsys.default_group_quota:
         new_fsys["default_group_quota"] = group_quota
         mod_fs = True
-    if module.params["http"] and not fsys.http.enabled:
-        new_fsys["http"] = module.params["http"]
-        mod_fs = True
-    if module.params["snapshot"] and not fsys.snapshot_directory_enabled:
-        new_fsys["snapshot_directory_enabled"] = module.params["snapshot"]
-        mod_fs = True
-    if module.params["fastremove"] and not fsys.fast_remove_directory_enabled:
-        new_fsys["fast_remove_directory_enabled"] = module.params["fastremove"]
-        mod_fs = True
-    if module.params["hard_limit"] and not fsys.hard_limit_enabled:
-        new_fsys["hard_limit_enabled"] = module.params["hard_limit"]
-        mod_fs = True
-    if module.params["safeguard_acls"] and not fsys.multi_protocol.safeguard_acls:
-        new_fsys["safeguard_acls"] = module.params["safeguard_acls"]
-        mod_fs = True
+    # Boolean flags are only compared when the caller set them, and then in
+    # both directions, so an explicit false turns the setting off.
+    bool_flags = [
+        ("smb", "smb", fsys.smb.enabled),
+        ("http", "http", fsys.http.enabled),
+        ("snapshot", "snapshot", fsys.snapshot_directory_enabled),
+        ("fastremove", "fastremove", fsys.fast_remove_directory_enabled),
+        ("hard_limit", "hardlimit", fsys.hard_limit_enabled),
+        ("safeguard_acls", "safeguard_acls", fsys.multi_protocol.safeguard_acls),
+    ]
+    for param, key, current in bool_flags:
+        if module.params[param] is not None and module.params[param] != current:
+            new_fsys[key] = module.params[param]
+            mod_fs = True
     if module.params["access_control"] != fsys.multi_protocol.access_control_style:
         new_fsys["acs"] = module.params["access_control"]
         mod_fs = True
@@ -1036,6 +1072,7 @@ def modify_fs(module, blade):
                         default_user_quota=new_fsys["default_user_quota"],
                         fast_remove_directory_enabled=new_fsys["fastremove"],
                         hard_limit_enabled=new_fsys["hardlimit"],
+                        snapshot_directory_enabled=new_fsys["snapshot"],
                         http=Http(enabled=new_fsys["http"]),
                         multi_protocol=MultiProtocol(
                             access_control_style=new_fsys["acs"],
@@ -1072,6 +1109,7 @@ def modify_fs(module, blade):
                         default_user_quota=new_fsys["default_user_quota"],
                         fast_remove_directory_enabled=new_fsys["fastremove"],
                         hard_limit_enabled=new_fsys["hardlimit"],
+                        snapshot_directory_enabled=new_fsys["snapshot"],
                         http=Http(enabled=new_fsys["http"]),
                         multi_protocol=MultiProtocol(
                             access_control_style=new_fsys["acs"],
@@ -1472,11 +1510,11 @@ def eradicate_fs(module, blade):
         fs_name = "{0}::{1}".format(realm_name, fs_name)
     changed = True
     if not module.check_mode:
-        res = blade.delete_file_systems(names=[module.params["name"]])
+        res = blade.delete_file_systems(names=[fs_name])
         if res.status_code != 200:
             module.fail_json(
                 msg="Failed to eradicate filesystem {0}. Error: {1}".format(
-                    module.params["name"], get_error_message(res)
+                    fs_name, get_error_message(res)
                 )
             )
     module.exit_json(changed=changed)
@@ -1491,13 +1529,13 @@ def main():
             nfsv3=dict(default="true", type="bool"),
             nfsv4=dict(default="true", type="bool"),
             nfs_rules=dict(type="str"),
-            smb=dict(default="false", type="bool"),
-            http=dict(default="false", type="bool"),
-            snapshot=dict(default="false", type="bool"),
+            smb=dict(type="bool"),
+            http=dict(type="bool"),
+            snapshot=dict(type="bool"),
             writable=dict(type="bool"),
             promote=dict(type="bool"),
-            fastremove=dict(default="false", type="bool"),
-            hard_limit=dict(default="false", type="bool"),
+            fastremove=dict(type="bool"),
+            hard_limit=dict(type="bool"),
             user_quota=dict(type="str"),
             policy=dict(type="str"),
             group_quota=dict(type="str"),
@@ -1511,7 +1549,7 @@ def main():
             state=dict(default="present", choices=["present", "absent"]),
             delete_link=dict(default=False, type="bool"),
             discard_snaps=dict(default=False, type="bool"),
-            safeguard_acls=dict(default=True, type="bool"),
+            safeguard_acls=dict(type="bool"),
             access_control=dict(
                 type="str",
                 default="shared",

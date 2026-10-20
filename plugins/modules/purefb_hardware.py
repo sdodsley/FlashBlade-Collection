@@ -117,12 +117,13 @@ def main():
     blade = get_system(module)
     api_version = get_rest_api_version(blade)
 
-    if module.params["speed"]:
+    speed = None
+    if module.params["speed"] is not None:
         speed = module.params["speed"] * 1000000000
     changed = False
     hardware = None
     res = blade.get_hardware(names=[module.params["name"]])
-    if res.status_code == 200:
+    if res.status_code == 200 and module.params["enabled"] is not None:
         hardware = list(res.items)[0]
         if hardware.identify_enabled != module.params["enabled"]:
             changed = True
@@ -142,7 +143,10 @@ def main():
     res = blade.get_hardware_connectors(names=[module.params["name"]])
     if res.status_code == 200:
         connector = list(res.items)[0]
-        if connector.port_count != module.params["ports"]:
+        if (
+            module.params["ports"] is not None
+            and connector.port_count != module.params["ports"]
+        ):
             changed = True
             if not module.check_mode:
                 res = blade.patch_hardware_connectors(
@@ -157,7 +161,7 @@ def main():
                             module.params["name"]
                         )
                     )
-        if connector.lane_speed != speed:
+        if speed is not None and connector.lane_speed != speed:
             changed = True
             if not module.check_mode:
                 res = blade.patch_hardware_connectors(

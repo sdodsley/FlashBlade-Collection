@@ -49,6 +49,8 @@ options:
     - Name of the certificate to present as the server certificate during
       TLS negotiation with clients connecting to network interfaces
       covered by this policy.
+    - Required when creating a policy; the array rejects a policy without
+      an appliance certificate. Use C(global) for the built-in certificate.
     - Set to C(global) to reset the policy to the built-in appliance
       certificate, effectively removing a previously assigned custom
       certificate.
@@ -58,6 +60,9 @@ options:
     - If C(true), all clients must present a client certificate during
       TLS negotiation; failure to do so will be rejected.
     - If C(false), client certificates are optional.
+    - The array only accepts C(true) when
+      I(verify_client_certificate_trust) is also C(true), which in turn
+      needs I(trusted_client_certificate_authority).
     - Requires Purity//FB REST API 2.18 or later.
     type: bool
   trusted_client_certificate_authority:
@@ -413,6 +418,13 @@ def delete_policy(module, blade):
 def create_policy(module, blade):
     """Create a new TLS policy and optionally attach it to interfaces."""
     changed = True
+    if not module.params["appliance_certificate"]:
+        module.fail_json(
+            msg=(
+                "appliance_certificate is required to create TLS policy {0} "
+                "(use 'global' for the built-in appliance certificate)."
+            ).format(module.params["name"])
+        )
     if module.params["network_interfaces"]:
         _validate_attachable(module, blade, module.params["network_interfaces"])
     if not module.check_mode:

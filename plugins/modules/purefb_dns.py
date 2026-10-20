@@ -169,29 +169,31 @@ def update_multi_dns(module, blade):
     """Update a DNS configuration"""
     changed = False
     current_dns = list(blade.get_dns(names=[module.params["name"]]).items)[0]
-    new_dns = current_dns
+    domain = current_dns.domain
+    nameservers = current_dns.nameservers
     if module.params["domain"] and current_dns.domain != module.params["domain"]:
-        new_dns.domain = module.params["domain"]
+        domain = module.params["domain"]
         changed = True
     if module.params["nameservers"] and sorted(current_dns.nameservers) != sorted(
         module.params["nameservers"]
     ):
-        new_dns.nameservers = module.params["nameservers"]
+        nameservers = module.params["nameservers"]
         changed = True
-    if (module.params["source"] or module.params["source"] == "") and getattr(
-        current_dns.sources[0], "name", ""
-    ) != module.params["source"]:
-        new_dns.sources[0].name = module.params["source"]
+    current_source = ""
+    if current_dns.sources:
+        current_source = getattr(current_dns.sources[0], "name", "") or ""
+    if (
+        module.params["source"] is not None
+        and current_source != module.params["source"]
+    ):
         changed = True
     if changed and not module.check_mode:
-        res = blade.patch_dns(
-            names=[module.params["name"]],
-            dns=Dns(
-                domain=new_dns.domain,
-                nameservers=new_dns.nameservers,
-                sources=[Reference(name=module.params["source"])],
-            ),
-        )
+        # Only send sources when the caller specified one, otherwise an
+        # omitted source would be sent as a reference with no name.
+        new_dns = {"domain": domain, "nameservers": nameservers}
+        if module.params["source"] is not None:
+            new_dns["sources"] = [Reference(name=module.params["source"])]
+        res = blade.patch_dns(names=[module.params["name"]], dns=Dns(**new_dns))
         if res.status_code != 200:
             module.fail_json(
                 msg="Update to DNS configuration {0} failed. Error: {1}".format(

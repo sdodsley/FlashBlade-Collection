@@ -75,6 +75,8 @@ from plugins.modules.purefb_realm import (
     get_realm,
     get_pending_realm,
     get_policy,
+    make_realm,
+    update_realm,
 )
 
 
@@ -208,9 +210,11 @@ class TestPurefbRealm:
             names=["test-realm"], without_default_access_list=True
         )
 
-        # Verify QoS policy was assigned
+        # Verify QoS policy was assigned to the realm member type
         mock_blade.post_qos_policies_members.assert_called_once_with(
-            policy_names=["test-qos-policy"], member_names=["test-realm"]
+            policy_names=["test-qos-policy"],
+            member_names=["test-realm"],
+            member_types=["realms"],
         )
 
         # Verify exit_json was called with changed=True
@@ -445,10 +449,10 @@ class TestPurefbRealm:
         mock_get_realm.return_value = True
         mock_get_pending_realm.return_value = None
 
-        # Mock successful rename
+        # Mock successful rename (the SDK method is patch_realms, plural)
         mock_patch_response = Mock()
         mock_patch_response.status_code = 200
-        mock_blade.patch_realm.return_value = mock_patch_response
+        mock_blade.patch_realms.return_value = mock_patch_response
 
         # Call main
         try:
@@ -456,8 +460,9 @@ class TestPurefbRealm:
         except SystemExit:
             pass
 
-        # Verify patch_realm was called
-        mock_blade.patch_realm.assert_called_once()
+        # Verify patch_realms was called for the rename
+        mock_blade.patch_realms.assert_called_once()
+        assert mock_blade.patch_realms.call_args[1]["names"] == ["test-realm"]
 
         # Verify exit_json was called with changed=True
         mock_module.exit_json.assert_called_once()
@@ -509,11 +514,13 @@ class TestPurefbRealm:
         mock_policy_member = Mock()
         mock_policy_member.policy = Mock()
         mock_policy_member.policy.name = "old-qos-policy"
+        mock_blade.get_qos_policies_members.return_value.status_code = 200
         mock_blade.get_qos_policies_members.return_value.items = [mock_policy_member]
 
-        # Mock successful QoS policy update
+        # Mock successful QoS policy update (new policy exists)
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_blade.get_qos_policies.return_value = mock_response
         mock_blade.delete_qos_policies_members.return_value = mock_response
         mock_blade.post_qos_policies_members.return_value = mock_response
 
@@ -896,3 +903,122 @@ class TestPurefbRealm:
         # Verify result
         assert result is True
         mock_blade.get_qos_policies.assert_called_once_with(names=["test-policy"])
+
+    def test_update_realm_without_qos_membership_is_noop(self):
+        """A realm with no QoS policy answers the members GET with an error
+        response that has no ``items``. update_realm must not touch
+        ``.items`` on it and must report no change.
+        """
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-realm",
+            "state": "present",
+            "qos_policy": None,
+            "eradicate": False,
+            "rename": None,
+        }
+        mock_module.check_mode = False
+
+        mock_blade = Mock()
+        error_response = Mock(spec=["status_code"])
+        error_response.status_code = 400
+        mock_blade.get_qos_policies_members.return_value = error_response
+
+        try:
+            update_realm(mock_module, mock_blade)
+        except SystemExit:
+            pass
+
+        mock_blade.delete_qos_policies_members.assert_not_called()
+        mock_blade.post_qos_policies_members.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefb_realm.get_pending_realm")
+    @patch("plugins.modules.purefb_realm.get_realm")
+    @patch("plugins.modules.purefb_realm.LooseVersion")
+    @patch("plugins.modules.purefb_realm.get_system")
+    @patch("plugins.modules.purefb_realm.AnsibleModule")
+    @patch("plugins.modules.purefb_realm.HAS_PURESTORAGE", True)
+    def test_main_rename_already_done_is_noop(
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_loose_version,
+        mock_get_realm,
+        mock_get_pending_realm,
+    ):
+        """Re-running a rename after it happened must not create a new
+        realm under the old name.
+        """
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "old-realm",
+            "without_default_access_list": True,
+            "state": "present",
+            "qos_policy": None,
+            "eradicate": False,
+            "rename": "new-realm",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.19"]
+        mock_get_system.return_value = mock_blade
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+
+        # Old name is gone, but the rename target exists
+        mock_get_realm.return_value = None
+        mock_get_pending_realm.return_value = None
+        mock_blade.get_realms.return_value.status_code = 200
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_blade.get_realms.assert_called_once_with(
+            destroyed=False, names=["new-realm"]
+        )
+        mock_blade.post_realms.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefb_realm.get_error_message", Mock(return_value="x"))
+    def test_make_realm_false_access_list_failure_carries_hint(self):
+        """Purity//FB rejects without_default_access_list=false; the failure
+        message must tell the user which setting to change.
+        """
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-realm",
+            "without_default_access_list": False,
+            "state": "present",
+            "qos_policy": None,
+            "eradicate": False,
+            "rename": None,
+        }
+        mock_module.check_mode = False
+
+        mock_blade = Mock()
+        mock_post_response = Mock()
+        mock_post_response.status_code = 400
+        mock_blade.post_realms.return_value = mock_post_response
+
+        try:
+            make_realm(mock_module, mock_blade)
+        except SystemExit:
+            pass
+
+        mock_blade.post_realms.assert_called_once_with(
+            names=["test-realm"], without_default_access_list=False
+        )
+        mock_module.fail_json.assert_called_once()
+        assert (
+            "without_default_access_list" in mock_module.fail_json.call_args[1]["msg"]
+        )

@@ -339,15 +339,16 @@ def create_export(module, blade):
                 policy_names=[module.params["client_policy"]],
                 **_context_kwargs(module),
             )
-
-    if res.status_code != 200:
-        module.fail_json(
-            msg="Failed to create export {0} for {1}. Error: {2}".format(
-                module.params["name"],
-                module.params["filesystem"],
-                get_error_message(res),
+        # Only evaluated when a request was made; in check mode there is
+        # no response to inspect.
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to create export {0} for {1}. Error: {2}".format(
+                    module.params["name"],
+                    module.params["filesystem"],
+                    get_error_message(res),
+                )
             )
-        )
     module.exit_json(changed=changed)
 
 

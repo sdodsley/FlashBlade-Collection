@@ -21,9 +21,11 @@ version_added: '1.0.0'
 short_description: Configure FlashBlade SNMP Managers
 description:
 - Manage SNMP managers on a Everpure FlashBlade.
-- This module is not idempotent and will always modify an
-  existing SNMP manager due to hidden parameters that cannot
-  be compared to the play parameters.
+- The array returns the SNMPv2c community string and the SNMPv3
+  passphrases masked, so they cannot be compared. They are only sent when
+  the SNMP version or another readable setting changes. A task that
+  changes nothing but the community string or a passphrase reports no
+  change.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -137,45 +139,63 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 )
 
 
+def _readable(value):
+    """Return value unless the array omitted or masked it.
+
+    The community string and the passphrases are secrets: the array
+    returns them as "****" (or not at all), so they can never be compared.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and value and value.strip("*") == "":
+        return None
+    return value
+
+
 def update_manager(module, blade):
     """Update SNMP Manager"""
     changed = False
     res = blade.get_snmp_managers(names=[module.params["name"]])
-    mgr = list(blade.get_snmp_managers(names=[module.params["name"]]).items)[0]
     if res.status_code != 200:
         module.fail_json(
             msg="Failed to get configuration for SNMP manager {0}. Error: {1}".format(
-                module.params["name"], mgr.errors[0].message
+                module.params["name"], get_error_message(res)
             )
         )
     mgr = list(res.items)[0]
+    version = module.params["version"] or mgr.version
+    # The array returns both the v2c and v3 blocks whatever the active
+    # version, with the community string and the passphrases masked as
+    # "****". Only the readable attributes of the requested version are
+    # compared; an omitted parameter keeps the current value, and the
+    # secrets are sent whenever the version or a readable setting changes.
     current_attr = {
-        "community": getattr(mgr.v2c, "community", None),
-        "notification": mgr.notification,
-        "host": mgr.host,
+        "notification": getattr(mgr, "notification", None),
+        "host": getattr(mgr, "host", None),
         "version": mgr.version,
-        "auth_passphrase": getattr(mgr.v3, "auth_passphrase", None),
-        "auth_protocol": getattr(mgr.v3, "auth_protocol", None),
-        "privacy_passphrase": getattr(mgr.v3, "privacy_passphrase", None),
-        "privacy_protocol": getattr(mgr.v3, "privacy_protocol", None),
-        "user": getattr(mgr.v3, "user", None),
     }
     new_attr = {
-        "community": module.params["community"],
         "notification": module.params["notification"],
-        "host": module.params["host"],
-        "version": module.params["version"],
-        "auth_passphrase": module.params["auth_passphrase"],
-        "auth_protocol": module.params["auth_protocol"],
-        "privacy_passphrase": module.params["privacy_passphrase"],
-        "privacy_protocol": module.params["privacy_protocol"],
-        "user": module.params["user"],
+        "host": module.params["host"] or current_attr["host"],
+        "version": version,
     }
+    if version == "v2c":
+        community = _readable(getattr(getattr(mgr, "v2c", None), "community", None))
+        if community is not None:
+            current_attr["community"] = community
+            new_attr["community"] = module.params["community"] or community
+    else:
+        current_v3 = getattr(mgr, "v3", None)
+        for attr in ("auth_protocol", "privacy_protocol", "user"):
+            current_attr[attr] = getattr(current_v3, attr, None)
+            new_attr[attr] = module.params[attr] or current_attr[attr]
     if current_attr != new_attr:
         changed = True
         if not module.check_mode:
-            if new_attr["version"] == "v2c":
-                updated_v2c_attrs = SnmpV2c(community=new_attr["community"])
+            if version == "v2c":
+                updated_v2c_attrs = None
+                if module.params["community"]:
+                    updated_v2c_attrs = SnmpV2c(community=module.params["community"])
                 updated_v2c_manager = SnmpManager(
                     host=new_attr["host"],
                     notification=new_attr["notification"],
@@ -193,11 +213,11 @@ def update_manager(module, blade):
                     )
             else:
                 updated_v3_attrs = SnmpV3(
-                    auth_protocol=new_attr["auth_protocol"],
-                    auth_passphrase=new_attr["auth_passphrase"],
-                    privacy_protocol=new_attr["privacy_protocol"],
-                    privacy_passphrase=new_attr["privacy_passphrase"],
-                    user=new_attr["user"],
+                    auth_protocol=module.params["auth_protocol"],
+                    auth_passphrase=module.params["auth_passphrase"],
+                    privacy_protocol=module.params["privacy_protocol"],
+                    privacy_passphrase=module.params["privacy_passphrase"],
+                    user=module.params["user"],
                 )
                 updated_v3_manager = SnmpManager(
                     host=new_attr["host"],
@@ -235,9 +255,9 @@ def delete_manager(module, blade):
 def create_manager(module, blade):
     """Create SNMP Manager"""
     changed = True
+    if not module.params["version"]:
+        module.fail_json(msg="SNMP version required to create a new manager")
     if not module.check_mode:
-        if not module.params["version"]:
-            module.fail_json(msg="SNMP version required to create a new manager")
         if module.params["version"] == "v2c":
             v2_attrs = SnmpV2c(community=module.params["community"])
             new_v2_manager = SnmpManager(
@@ -359,13 +379,12 @@ def main():
             mgr_configured = True
             break
     if module.params["version"] == "v3":
-        if module.params["auth_passphrase"] and (
-            8 > len(module.params["auth_passphrase"]) > 32
+        if module.params["auth_passphrase"] and not (
+            8 <= len(module.params["auth_passphrase"]) <= 32
         ):
             module.fail_json(msg="auth_password must be between 8 and 32 characters")
-        if (
-            module.params["privacy_passphrase"]
-            and 8 > len(module.params["privacy_passphrase"]) > 63
+        if module.params["privacy_passphrase"] and not (
+            8 <= len(module.params["privacy_passphrase"]) <= 63
         ):
             module.fail_json(msg="privacy_password must be between 8 and 63 characters")
     if state == "absent" and mgr_configured:

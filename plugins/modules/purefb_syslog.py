@@ -210,8 +210,18 @@ def update_syslog(module, blade):
 def test_syslog(module, blade):
     """Test syslog configuration"""
     test_response = []
-    response = list(blade.get_syslog_servers_test().items)
-    for component in response:
+    # The syslog test endpoint takes no names filter, so the array tests
+    # every configured server; only the results for I(name) are returned.
+    res = blade.get_syslog_servers_test()
+    if res.status_code != 200:
+        module.fail_json(
+            msg="Failed to test syslog server {0}. Error: {1}".format(
+                module.params["name"], get_error_message(res)
+            )
+        )
+    for component in list(res.items):
+        if getattr(component.resource, "name", None) != module.params["name"]:
+            continue
         if component.enabled:
             enabled = "true"
         else:
@@ -233,7 +243,7 @@ def test_syslog(module, blade):
                 "resource_name": component.resource.name,
             }
         )
-    module.exit_json(changed=True, test_response=test_response)
+    module.exit_json(changed=False, test_response=test_response)
 
 
 def main():

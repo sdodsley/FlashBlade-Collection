@@ -34,9 +34,14 @@ options:
     description:
     - Name of the certificate group
     type: str
+    required: true
   certificates:
     description:
-    - List of certifcates to add to a policy on creation
+    - List of certificates to add to the group (I(state=present)) or to
+      remove from the group (I(state=absent)).
+    - Certificates already in the group are left alone, so repeated runs
+      report no change.
+    - With I(state=absent) and no certificates the whole group is deleted.
     type: list
     elements: str
 extends_documentation_fragment:
@@ -49,10 +54,10 @@ EXAMPLES = r"""
     name: test_grp
     fb_url: 10.10.10.2
     api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
-- name: Create a cerifcate group and add existing certificates
+- name: Create a certificate group and add existing certificates
   everpure.flashblade.purefb_certgrp:
     name: test_grp
-    certifcates:
+    certificates:
       - cert1
       - cert2
     fb_url: 10.10.10.2
@@ -87,25 +92,25 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 
 
 def delete_certgrp(module, blade):
-    """Delete certifcate group"""
+    """Delete certificate group"""
     changed = True
     if not module.check_mode:
         res = blade.delete_certificate_groups(names=[module.params["name"]])
         if res.status_code != 200:
             module.fail_json(
-                msg="Failed to delete certifcate group {0}.".format(
-                    module.params["name"]
+                msg="Failed to delete certificate group {0}. Error: {1}".format(
+                    module.params["name"], get_error_message(res)
                 )
             )
     module.exit_json(changed=changed)
 
 
 def create_certgrp(module, blade):
-    """Create certifcate group"""
+    """Create certificate group"""
     changed = True
     if not module.check_mode:
         res = blade.post_certificate_groups(names=[module.params["name"]])
-        if res.sttaus_code != 200:
+        if res.status_code != 200:
             module.fail_json(
                 msg="Failed to create certificate group {0}. Error: {1}".format(
                     module.params["name"], get_error_message(res)
@@ -119,78 +124,61 @@ def create_certgrp(module, blade):
             if res.status_code != 200:
                 blade.delete_certificate_groups(names=[module.params["name"]])
                 module.fail_json(
-                    msg="Failed to add certifcates {0}. Error: {1}".format(
+                    msg="Failed to add certificates {0}. Error: {1}".format(
                         module.params["certificates"], get_error_message(res)
                     )
                 )
     module.exit_json(changed=changed)
 
 
-def update_certgrp(module, blade):
-    """Update certificate group"""
-    changed = False
-    res = blade.get_certificate_group_certificates(
+def get_group_certificates(module, blade):
+    """Return the names of the certificates currently in the group"""
+    res = blade.get_certificate_groups_certificates(
         certificate_group_names=[module.params["name"]]
     )
     if res.status_code != 200:
         module.fail_json(
-            msg="Failed to get certifates list for group {0}. Error: {1}".format(
+            msg="Failed to get certificate list for group {0}. Error: {1}".format(
                 module.params["name"], get_error_message(res)
             )
         )
-    certs = list(res.items)
-    if certs:
-        if module.params["state"] == "present":
+    return [item.member.name for item in list(res.items)]
+
+
+def update_certgrp(module, blade):
+    """Add certificates to, or remove certificates from, an existing group"""
+    changed = False
+    current = get_group_certificates(module, blade)
+    if module.params["state"] == "present":
+        to_add = [cert for cert in module.params["certificates"] if cert not in current]
+        if to_add:
             changed = True
             if not module.check_mode:
-                res = blade.post_certificate_group_certificates(
-                    certificate_names=module.params["certificates"],
+                res = blade.post_certificate_groups_certificates(
+                    certificate_names=to_add,
                     certificate_group_names=[module.params["name"]],
                 )
                 if res.status_code != 200:
                     module.fail_json(
-                        msg="Failed to add certifcates {0}. Error: {1}".format(
-                            module.params["certificates"], get_error_message(res)
+                        msg="Failed to add certificates {0} to group {1}. Error: {2}".format(
+                            to_add, module.params["name"], get_error_message(res)
                         )
                     )
     else:
-        current = []
-        for cert in certs:
-            current.append(cert.member.name)
-        for new_cert in module.params["certificates"]:
-            certificate = new_cert
-            if certificate in current:
-                if module.params["state"] == "absent":
-                    changed = True
-                    if not module.check_mode:
-                        res = blade.delete_certificate_group_certificates(
-                            certificate_names=[certificate],
-                            certificate_group_names=[module.params["name"]],
+        to_remove = [cert for cert in module.params["certificates"] if cert in current]
+        if to_remove:
+            changed = True
+            if not module.check_mode:
+                res = blade.delete_certificate_groups_certificates(
+                    certificate_names=to_remove,
+                    certificate_group_names=[module.params["name"]],
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to delete certificates {0} from group {1}. Error: {2}".format(
+                            to_remove, module.params["name"], get_error_message(res)
                         )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to delete certifcate {0} from group {1}. Error: {2}".format(
-                                    certificate,
-                                    module.params["name"],
-                                    get_error_message(res),
-                                )
-                            )
-            else:
-                if module.params["state"] == "present":
-                    changed = True
-                    if not module.check_mode:
-                        res = blade.post_certificate_group_certificates(
-                            certificate_names=[certificate],
-                            certificate_group_names=[module.params["name"]],
-                        )
-                        if res.status_code != 200:
-                            module.fail_json(
-                                msg="Failed to add certifcate {0} to group {1}. Error: {2}".format(
-                                    certificate,
-                                    module.params["name"],
-                                    get_error_message(res),
-                                )
-                            )
+                    )
     module.exit_json(changed=changed)
 
 
@@ -199,7 +187,7 @@ def main():
     argument_spec.update(
         dict(
             state=dict(type="str", default="present", choices=["absent", "present"]),
-            name=dict(type="str"),
+            name=dict(type="str", required=True),
             certificates=dict(type="list", elements="str"),
         )
     )

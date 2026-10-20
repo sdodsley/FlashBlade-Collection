@@ -21,8 +21,8 @@ version_added: '1.0.0'
 short_description: Manage filesystem snapshots on Everpure FlashBlades
 description:
 - Create or delete volumes and filesystem snapshots on Everpure FlashBlades.
-- Restoring a filesystem from a snapshot is only supported using
-  the latest snapshot.
+- Restoring a filesystem uses the snapshot named by I(suffix) when one is
+  given, otherwise the latest snapshot of the filesystem.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -34,6 +34,8 @@ options:
   suffix:
     description:
     - Suffix of snapshot name.
+    - With I(state=restore), names the snapshot to restore from. If not
+      given the latest snapshot of the filesystem is used.
     type: str
   state:
     description:
@@ -123,6 +125,14 @@ EXAMPLES = r"""
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
     state: restore
 
+- name: Restore filesystem foo from snapshot foo.ansible
+  everpure.flashblade.purefb_snap:
+    name: foo
+    suffix: ansible
+    fb_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+    state: restore
+
 - name: Eradicate snapshot named foo.snap
   everpure.flashblade.purefb_snap:
     name: foo
@@ -189,12 +199,15 @@ def get_latest_fssnapshot(module, blade):
             )
         )
     all_snaps = list(res.items)
-    last_snap = sorted(all_snaps, key=lambda x: x["created"])[-1]
+    if not all_snaps:
+        return None
+    # SDK models are attribute objects, not dicts, so sort on the attribute.
+    last_snap = sorted(all_snaps, key=lambda x: getattr(x, "created", 0) or 0)[-1]
     if not last_snap.destroyed:
         return last_snap.name
     module.fail_json(
         msg="Latest snapshot {0} is destroyed."
-        " Eradicate or recover this first.".format(all_snaps[0].name)
+        " Eradicate or recover this first.".format(last_snap.name)
     )
     return None
 
@@ -219,7 +232,9 @@ def get_fssnapshot(module, blade):
             ],
         )
     if res.status_code == 200:
-        return list(res.items)[0]
+        items = list(res.items)
+        if items:
+            return items[0]
     return None
 
 
@@ -248,7 +263,7 @@ def create_snapshot(module, blade):
         ):
             blade_exists = True
             break
-    if not module.params["target"] and blade_exists:
+    if module.params["target"] and not blade_exists:
         module.fail_json(msg="Selected target is not a correctly connected system")
     changed = True
     if not module.check_mode:
@@ -303,11 +318,31 @@ def create_snapshot(module, blade):
     module.exit_json(changed=changed)
 
 
-def restore_snapshot(module, blade):
-    """Restore a filesystem back from the latest snapshot"""
+def restore_snapshot(module, blade, snap=None):
+    """Restore a filesystem from a snapshot.
+
+    When the caller named a suffix, ``snap`` is that snapshot (or None if it
+    does not exist) and it is used as the source. Without a suffix the
+    latest snapshot of the filesystem is used.
+    """
     changed = True
     api_version = get_rest_api_version(blade)
-    snapname = get_latest_fssnapshot(module, blade)
+    if module.params["suffix_given"]:
+        snapname = module.params["name"] + "." + module.params["suffix"]
+        if snap is None:
+            module.fail_json(
+                msg="Snapshot {0} does not exist, cannot restore from it.".format(
+                    snapname
+                )
+            )
+        if snap.destroyed:
+            module.fail_json(
+                msg="Snapshot {0} is destroyed. Recover it before restoring.".format(
+                    snapname
+                )
+            )
+    else:
+        snapname = get_latest_fssnapshot(module, blade)
     if snapname is not None:
         if not module.check_mode:
             if (
@@ -472,6 +507,9 @@ def main():
     if not HAS_PYPURECLIENT:
         module.fail_json(msg="py-pure-client sdk is required for this module")
 
+    # Remember whether the caller named a suffix before a default is
+    # generated; state=restore uses the named snapshot only in that case.
+    module.params["suffix_given"] = module.params["suffix"] is not None
     if module.params["suffix"] is None:
         suffix = "snap-" + str(
             (datetime.utcnow() - datetime(1970, 1, 1, 0, 0, 0, 0)).total_seconds()
@@ -521,11 +559,14 @@ def main():
     elif state == "present" and not filesystem:
         update_snapshot(module, blade)
     elif state == "restore" and filesystem:
-        restore_snapshot(module, blade)
+        restore_snapshot(module, blade, snap)
     elif state == "absent" and snap and not snap.destroyed:
         delete_snapshot(module, blade)
-    elif state == "absent" and snap and snap.destroyed:
+    elif state == "absent" and snap and snap.destroyed and module.params["eradicate"]:
         eradicate_snapshot(module, blade)
+    elif state == "absent" and snap and snap.destroyed:
+        # Already destroyed and eradicate not requested: nothing to do.
+        module.exit_json(changed=False)
     elif state == "absent" and not snap:
         module.exit_json(changed=False)
     else:

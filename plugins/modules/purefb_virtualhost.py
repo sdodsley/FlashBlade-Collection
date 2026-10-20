@@ -177,22 +177,26 @@ def main():
             ).status_code
             == 200
         )
-    if (
-        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
-        and module.params["context"]
-    ):
-        vhosts = blade.get_object_store_virtual_hosts(
-            context_names=[module.params["context"]]
-        )
-    else:
-        vhosts = blade.get_object_store_virtual_hosts()
-    if vhosts.total_item_count < MAX_HOST_COUNT:
-        if not exists and state == "present":
-            add_host(module, blade)
-        elif exists and state == "absent":
-            delete_host(module, blade)
-    else:
-        module.warn("Maximum Object Store Virtual Host reached.")
+    if exists and state == "absent":
+        delete_host(module, blade)
+    elif not exists and state == "present":
+        # The host cap only limits additions; deleting, or re-asserting a
+        # host that already exists, must not be blocked by it.
+        if (
+            LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+            and module.params["context"]
+        ):
+            vhosts = blade.get_object_store_virtual_hosts(
+                context_names=[module.params["context"]]
+            )
+        else:
+            vhosts = blade.get_object_store_virtual_hosts()
+        if vhosts.total_item_count >= MAX_HOST_COUNT:
+            module.fail_json(
+                msg="Maximum Object Store Virtual Host count ({0}) reached. "
+                "Cannot add {1}.".format(MAX_HOST_COUNT, module.params["name"])
+            )
+        add_host(module, blade)
 
     module.exit_json(changed=False)
 

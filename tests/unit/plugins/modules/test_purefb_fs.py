@@ -109,13 +109,14 @@ class TestPurefbFs:
             "nfsv3": True,
             "nfsv4": True,
             "nfs_rules": None,
-            "smb": False,
-            "http": False,
-            "snapshot": False,
+            # The boolean flags default to None (only applied when set).
+            "smb": None,
+            "http": None,
+            "snapshot": None,
             "writable": None,
             "promote": None,
-            "fastremove": False,
-            "hard_limit": False,
+            "fastremove": None,
+            "hard_limit": None,
             "user_quota": None,
             "policy": None,
             "group_quota": None,
@@ -124,7 +125,7 @@ class TestPurefbFs:
             "policy_state": "present",
             "delete_link": False,
             "discard_snaps": False,
-            "safeguard_acls": True,
+            "safeguard_acls": None,
             "access_control": "shared",
             "size": None,
             "export_policy": None,
@@ -137,6 +138,42 @@ class TestPurefbFs:
             "storage_class": None,
             "realm": None,
         }
+
+    def _existing_fs(self, **overrides):
+        """Mock of an existing, promoted, writable filesystem with every
+        boolean flag off and safeguard_acls on. Keyword overrides set the
+        flat attributes (e.g. hard_limit_enabled=True) or the nested ones
+        through smb_enabled / http_enabled / safeguard_acls.
+        """
+        fs = Mock()
+        fs.destroyed = False
+        fs.provisioned = 1099511627776
+        fs.nfs = Mock()
+        fs.nfs.v3_enabled = True
+        fs.nfs.v4_1_enabled = True
+        fs.nfs.rules = ""
+        fs.nfs.export_policy = Mock()
+        fs.nfs.export_policy.name = None
+        fs.smb = Mock()
+        fs.smb.enabled = overrides.pop("smb_enabled", False)
+        fs.smb.continuous_availability_enabled = True
+        fs.http = Mock()
+        fs.http.enabled = overrides.pop("http_enabled", False)
+        fs.snapshot_directory_enabled = False
+        fs.fast_remove_directory_enabled = False
+        fs.hard_limit_enabled = False
+        fs.default_user_quota = None
+        fs.default_group_quota = None
+        fs.group_ownership = "creator"
+        fs.multi_protocol = Mock()
+        fs.multi_protocol.safeguard_acls = overrides.pop("safeguard_acls", True)
+        fs.multi_protocol.access_control_style = "shared"
+        fs.promotion_status = "promoted"
+        fs.requested_promotion_state = "promoted"
+        fs.writable = True
+        for attr, value in overrides.items():
+            setattr(fs, attr, value)
+        return fs
 
     @patch("plugins.modules.purefb_fs.get_filesystem")
     @patch("plugins.modules.purefb_fs.get_system")
@@ -1362,9 +1399,10 @@ class TestPurefbFs:
         mock_fs.writable = True
         mock_get_filesystem.return_value = mock_fs
 
-        # Mock policy exists and is attached
+        # Mock policy exists and is attached (membership GET has one item)
         mock_policy_response = Mock()
         mock_policy_response.status_code = 200
+        mock_policy_response.total_item_count = 1
         mock_blade.get_policies.return_value = mock_policy_response
         mock_blade.get_policies_file_systems.return_value = mock_policy_response
 
@@ -4753,3 +4791,214 @@ class TestPurefbFs:
                     "client_policy is deprecated",
                 )
             )
+
+    # ==== boolean flags on modify (hard_limit / fastremove / snapshot / ...) ====
+
+    def _run_modify(self, params, mock_fs, mock_get_filesystem):
+        """Run modify_fs against mock_fs and return (module, blade)."""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = params
+        mock_blade = Mock()
+        mock_get_filesystem.return_value = mock_fs
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_blade.patch_file_systems.return_value = mock_response
+        mock_blade.get_file_systems.return_value.items = [mock_fs]
+        modify_fs(mock_module, mock_blade)
+        return mock_module, mock_blade
+
+    @patch("plugins.modules.purefb_fs.FileSystemPatch")
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.0"),
+    )
+    def test_modify_fs_flags_are_sent_in_patch(
+        self, mock_get_filesystem, mock_fs_patch
+    ):
+        """hard_limit, fastremove and snapshot must reach the FileSystemPatch
+        under their REST names. The old code compared under one key and
+        read another, so the PATCH always carried the current value and
+        the flags were never applied.
+        """
+        params = self.get_default_params()
+        params.update({"hard_limit": True, "fastremove": True, "snapshot": True})
+
+        mock_module, mock_blade = self._run_modify(
+            params, self._existing_fs(), mock_get_filesystem
+        )
+
+        mock_blade.patch_file_systems.assert_called_once()
+        kwargs = mock_fs_patch.call_args[1]
+        assert kwargs["hard_limit_enabled"] is True
+        assert kwargs["fast_remove_directory_enabled"] is True
+        assert kwargs["snapshot_directory_enabled"] is True
+        mock_module.exit_json.assert_called_with(changed=True)
+
+    @patch("plugins.modules.purefb_fs.FileSystemPatch")
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.0"),
+    )
+    def test_modify_fs_explicit_false_turns_flags_off(
+        self, mock_get_filesystem, mock_fs_patch
+    ):
+        """An explicit false must turn a flag off (True -> False)."""
+        params = self.get_default_params()
+        params.update({"hard_limit": False, "http": False, "safeguard_acls": False})
+        mock_fs = self._existing_fs(
+            hard_limit_enabled=True, http_enabled=True, safeguard_acls=True
+        )
+
+        mock_module, mock_blade = self._run_modify(params, mock_fs, mock_get_filesystem)
+
+        mock_blade.patch_file_systems.assert_called_once()
+        kwargs = mock_fs_patch.call_args[1]
+        assert kwargs["hard_limit_enabled"] is False
+        mock_module.exit_json.assert_called_with(changed=True)
+
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.0"),
+    )
+    def test_modify_fs_omitted_flags_are_left_alone(self, mock_get_filesystem):
+        """Flags that are not set (None) must not be compared, so a run that
+        only names the filesystem does not turn anything off and is a no-op.
+        """
+        params = self.get_default_params()
+        mock_fs = self._existing_fs(
+            hard_limit_enabled=True,
+            fast_remove_directory_enabled=True,
+            snapshot_directory_enabled=True,
+            smb_enabled=True,
+            http_enabled=True,
+            safeguard_acls=False,
+        )
+
+        mock_module, mock_blade = self._run_modify(params, mock_fs, mock_get_filesystem)
+
+        mock_blade.patch_file_systems.assert_not_called()
+        mock_module.exit_json.assert_called_with(changed=False)
+
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.0"),
+    )
+    def test_modify_fs_flag_already_set_is_noop(self, mock_get_filesystem):
+        """Setting a flag that is already on reports no change."""
+        params = self.get_default_params()
+        params.update({"hard_limit": True})
+        mock_fs = self._existing_fs(hard_limit_enabled=True)
+
+        mock_module, mock_blade = self._run_modify(params, mock_fs, mock_get_filesystem)
+
+        mock_blade.patch_file_systems.assert_not_called()
+        mock_module.exit_json.assert_called_with(changed=False)
+
+    # ==== policy_state=absent idempotency ====
+
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.0"),
+    )
+    def test_modify_fs_remove_policy_not_attached_is_noop(self, mock_get_filesystem):
+        """GET policies/file-systems answers 200 with zero items when the
+        policy is not attached. A second policy_state=absent run must not
+        try to detach again (the array rejects that) and must report no
+        change.
+        """
+        params = self.get_default_params()
+        params.update({"policy": "test-policy", "policy_state": "absent"})
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = params
+
+        mock_blade = Mock()
+        mock_fs = self._existing_fs()
+        mock_get_filesystem.return_value = mock_fs
+        mock_blade.get_file_systems.return_value.items = [mock_fs]
+
+        policy_res = Mock()
+        policy_res.status_code = 200
+        mock_blade.get_policies.return_value = policy_res
+        member_res = Mock()
+        member_res.status_code = 200
+        member_res.total_item_count = 0
+        member_res.items = []
+        mock_blade.get_policies_file_systems.return_value = member_res
+
+        modify_fs(mock_module, mock_blade)
+
+        mock_blade.delete_policies_file_systems.assert_not_called()
+        mock_module.exit_json.assert_called_with(changed=False)
+
+    # ==== realm-qualified eradicate ====
+
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    def test_eradicate_fs_uses_realm_qualified_name(self):
+        """name + realm must eradicate realm::name, not the bare name."""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {"name": "prod-fs", "realm": "production-realm"}
+        mock_blade = Mock()
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_blade.delete_file_systems.return_value = mock_response
+
+        eradicate_fs(mock_module, mock_blade)
+
+        mock_blade.delete_file_systems.assert_called_once_with(
+            names=["production-realm::prod-fs"]
+        )
+        mock_module.exit_json.assert_called_with(changed=True)
+
+    # ==== create: group_ownership is not an SMB attribute ====
+
+    @patch("plugins.modules.purefb_fs.FileSystemPatch")
+    @patch("plugins.modules.purefb_fs.get_filesystem")
+    @patch("plugins.modules.purefb_fs.HAS_PYPURECLIENT", True)
+    @patch("plugins.modules.purefb_fs.LooseVersion", RealLooseVersion)
+    @patch(
+        "plugins.modules.purefb_fs.get_rest_api_version",
+        Mock(return_value="2.13"),
+    )
+    def test_create_fs_group_ownership_applied_without_smb(
+        self, mock_get_filesystem, mock_fs_patch
+    ):
+        """group_ownership used to be nested under the SMB block, so an NFS
+        only filesystem never got it at creation time and the next run
+        reported a change.
+        """
+        mock_module = Mock()
+        mock_module.check_mode = False
+        params = self.get_default_params()
+        params.update({"group_ownership": "parent-directory"})
+        mock_module.params = params
+
+        mock_blade = Mock()
+        mock_get_filesystem.return_value = None
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_blade.post_file_systems.return_value = mock_response
+        mock_blade.patch_file_systems.return_value = mock_response
+
+        create_fs(mock_module, mock_blade)
+
+        mock_fs_patch.assert_any_call(group_ownership="parent-directory")
+        mock_blade.patch_file_systems.assert_called()
+        mock_module.exit_json.assert_called_with(changed=True)

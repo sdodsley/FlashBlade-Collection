@@ -112,7 +112,7 @@ EXAMPLES = """
   everpure.flashblade.purefb_groupquota:
     name: foo
     quota: 20G
-    gid: bar
+    gid: 1234
     state: present
     fb_url: 10.10.10.2
     api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
@@ -145,9 +145,10 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 
 
 def get_quota(module, blade):
-    """Return Filesystem User Quota or None"""
+    """Return Filesystem Group Quota or None"""
     api_version = get_rest_api_version(blade)
-    if module.params["gid"]:
+    # gid 0 (root) is a valid value, so test for presence rather than truth.
+    if module.params["gid"] is not None:
         if (
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
             and module.params["context"]
@@ -187,7 +188,7 @@ def create_quota(module, blade):
     changed = True
     api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if module.params["gid"]:
+        if module.params["gid"] is not None:
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
                 and module.params["context"]
@@ -256,7 +257,7 @@ def update_quota(module, blade):
     if current_quota.quota != human_to_bytes(module.params["quota"]):
         changed = True
         if not module.check_mode:
-            if module.params["gid"]:
+            if module.params["gid"] is not None:
                 if (
                     LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
                     and module.params["context"]
@@ -322,7 +323,7 @@ def delete_quota(module, blade):
     changed = True
     api_version = get_rest_api_version(blade)
     if not module.check_mode:
-        if module.params["gid"]:
+        if module.params["gid"] is not None:
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
                 and module.params["context"]
@@ -383,10 +384,12 @@ def main():
     )
 
     mutually_exclusive = [["gid", "gname"]]
+    required_one_of = [["gid", "gname"]]
     required_if = [["state", "present", ["quota"]]]
     module = AnsibleModule(
         argument_spec,
         mutually_exclusive=mutually_exclusive,
+        required_one_of=required_one_of,
         required_if=required_if,
         supports_check_mode=True,
     )

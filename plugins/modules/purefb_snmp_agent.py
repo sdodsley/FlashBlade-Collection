@@ -21,9 +21,11 @@ version_added: '1.0.0'
 short_description: Configure the FlashBlade SNMP Agent
 description:
 - Configure the management SNMP Agent on a Everpure FlashBlade.
-- This module is not idempotent and will always modify the
-  existing management SNMP agent due to hidden parameters that cannot
-  be compared to the play parameters.
+- The array returns the SNMPv2c community string and the SNMPv3
+  passphrases masked, so they cannot be compared. They are only sent when
+  the SNMP version or another readable setting changes. A task that
+  changes nothing but the community string or a passphrase reports no
+  change.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -100,6 +102,19 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 )
 
 
+def _readable(value):
+    """Return value unless the array omitted or masked it.
+
+    The community string and the passphrases are secrets: the array
+    returns them as "****" (or not at all), so they can never be compared.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and value and value.strip("*") == "":
+        return None
+    return value
+
+
 def update_agent(module, blade):
     """Update SNMP Agent"""
     changed = False
@@ -107,29 +122,29 @@ def update_agent(module, blade):
     if res.status_code != 200:
         module.fail_json(msg="Failed to get configuration for SNMP agent.")
     agent = list(res.items)[0]
-    current_attr = {
-        "community": agent.v2c.community,
-        "version": agent.version,
-        "auth_passphrase": agent.v3.auth_passphrase,
-        "auth_protocol": agent.v3.auth_protocol,
-        "privacy_passphrase": agent.v3.privacy_passphrase,
-        "privacy_protocol": agent.v3.privacy_protocol,
-        "user": agent.v3.user,
-    }
-    new_attr = {
-        "community": module.params["community"],
-        "version": module.params["version"],
-        "auth_passphrase": module.params["auth_passphrase"],
-        "auth_protocol": module.params["auth_protocol"],
-        "privacy_passphrase": module.params["privacy_passphrase"],
-        "privacy_protocol": module.params["privacy_protocol"],
-        "user": module.params["user"],
-    }
+    version = module.params["version"] or agent.version
+    # The array returns both the v2c and v3 blocks whatever the active
+    # version, with the community string and the passphrases masked as
+    # "****". Only the readable attributes of the requested version are
+    # compared; an omitted parameter keeps the current value, and the
+    # secrets are sent whenever the version or a readable setting changes.
+    current_attr = {"version": agent.version}
+    new_attr = {"version": version}
+    if version == "v2c":
+        community = _readable(getattr(getattr(agent, "v2c", None), "community", None))
+        if community is not None:
+            current_attr["community"] = community
+            new_attr["community"] = module.params["community"] or community
+    else:
+        current_v3 = getattr(agent, "v3", None)
+        for attr in ("auth_protocol", "privacy_protocol", "user"):
+            current_attr[attr] = getattr(current_v3, attr, None)
+            new_attr[attr] = module.params[attr] or current_attr[attr]
     if current_attr != new_attr:
         changed = True
         if not module.check_mode:
-            if new_attr["version"] == "v2c":
-                updated_v2c_attrs = SnmpV2c(community=new_attr["community"])
+            if version == "v2c":
+                updated_v2c_attrs = SnmpV2c(community=module.params["community"])
                 updated_v2c_agent = SnmpAgent(version="v2c", v2c=updated_v2c_attrs)
                 res = blade.patch_snmp_agents(snmp_agent=updated_v2c_agent)
                 if res.status_code != 200:
@@ -140,11 +155,11 @@ def update_agent(module, blade):
                     )
             else:
                 updated_v3_attrs = SnmpV3(
-                    auth_protocol=new_attr["auth_protocol"],
-                    auth_passphrase=new_attr["auth_passphrase"],
-                    privacy_protocol=new_attr["privacy_protocol"],
-                    privacy_passphrase=new_attr["privacy_passphrase"],
-                    user=new_attr["user"],
+                    auth_protocol=module.params["auth_protocol"],
+                    auth_passphrase=module.params["auth_passphrase"],
+                    privacy_protocol=module.params["privacy_protocol"],
+                    privacy_passphrase=module.params["privacy_passphrase"],
+                    user=module.params["user"],
                 )
                 updated_v3_agent = SnmpAgent(version="v3", v3=updated_v3_attrs)
                 res = blade.patch_snmp_agents(snmp_agent=updated_v3_agent)
@@ -191,13 +206,12 @@ def main():
         module.fail_json(msg="py-pure-client SDK is required for this module")
 
     if module.params["version"] == "v3":
-        if module.params["auth_passphrase"] and (
-            8 > len(module.params["auth_passphrase"]) > 32
+        if module.params["auth_passphrase"] and not (
+            8 <= len(module.params["auth_passphrase"]) <= 32
         ):
             module.fail_json(msg="auth_password must be between 8 and 32 characters")
-        if (
-            module.params["privacy_passphrase"]
-            and 8 > len(module.params["privacy_passphrase"]) > 63
+        if module.params["privacy_passphrase"] and not (
+            8 <= len(module.params["privacy_passphrase"]) <= 63
         ):
             module.fail_json(msg="privacy_password must be between 8 and 63 characters")
 

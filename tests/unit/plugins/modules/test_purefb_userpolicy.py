@@ -70,10 +70,10 @@ sys.modules["ansible_collections.everpure.flashblade.plugins.module_utils.versio
     MagicMock()
 )
 
-from plugins.modules.purefb_userpolicy import add_policy
+from plugins.modules.purefb_userpolicy import add_policy, list_policy, main
 
 
-def _make_module(context="array1"):
+def _make_module(context="array1", **overrides):
     module = Mock()
     module.check_mode = False
     module.exit_json = Mock(side_effect=SystemExit)
@@ -85,7 +85,20 @@ def _make_module(context="array1"):
         "context": context,
         "state": "present",
     }
+    module.params.update(overrides)
     return module
+
+
+def _policy(name):
+    policy = Mock()
+    policy.name = name
+    return policy
+
+
+def _membership(policy_name):
+    member = Mock()
+    member.policy = _policy(policy_name)
+    return member
 
 
 def _make_blade(already_assigned=False):
@@ -158,3 +171,97 @@ class TestPurefbUserpolicyAddPolicy:
         blade.post_object_store_access_policies_object_store_users.assert_not_called()
         module.exit_json.assert_called_once()
         assert module.exit_json.call_args[1]["changed"] is False
+
+
+class TestPurefbUserpolicyShow:
+    """state=show is read-only: it must list policies without reporting a change."""
+
+    @patch("plugins.modules.purefb_userpolicy.LooseVersion")
+    def test_show_user_policies_reports_no_change(self, mock_loose_version):
+        module = _make_module(context="array1", state="show", policy=None)
+        blade = Mock()
+        blade.get_versions.return_value.items = ["2.17", "2.24"]
+        res = blade.get_object_store_access_policies_object_store_users.return_value
+        res.status_code = 200
+        res.items = [
+            _membership("pure:policy/full-access"),
+            _membership("pure:policy/object-read"),
+        ]
+        mock_loose_version.return_value.__le__ = Mock(return_value=True)
+
+        try:
+            list_policy(module, blade)
+        except SystemExit:
+            pass
+
+        kwargs = blade.get_object_store_access_policies_object_store_users.call_args[1]
+        assert kwargs.get("member_names") == ["myaccount/myuser"]
+        assert kwargs.get("context_names") == ["array1"]
+        module.exit_json.assert_called_once()
+        assert module.exit_json.call_args[1]["changed"] is False
+        assert module.exit_json.call_args[1]["policy_list"] == [
+            "pure:policy/full-access",
+            "pure:policy/object-read",
+        ]
+        module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefb_userpolicy.LooseVersion")
+    def test_show_all_policies_without_user_reports_no_change(self, mock_loose_version):
+        """Array-wide show has no account/name; it must not build a user name."""
+        module = _make_module(context="", state="show", name=None, account=None)
+        module.params["policy"] = None
+        blade = Mock()
+        blade.get_versions.return_value.items = ["2.17", "2.24"]
+        blade.get_object_store_access_policies.return_value.status_code = 200
+        blade.get_object_store_access_policies.return_value.items = [
+            _policy("pure:policy/full-access"),
+            _policy("pure:policy/object-read"),
+        ]
+        mock_loose_version.return_value.__le__ = Mock(return_value=False)
+
+        try:
+            list_policy(module, blade)
+        except SystemExit:
+            pass
+
+        blade.get_object_store_access_policies_object_store_users.assert_not_called()
+        blade.get_object_store_access_policies.assert_called_once_with()
+        module.exit_json.assert_called_once()
+        assert module.exit_json.call_args[1]["changed"] is False
+        assert module.exit_json.call_args[1]["policy_list"] == [
+            "pure:policy/full-access",
+            "pure:policy/object-read",
+        ]
+
+    @patch("plugins.modules.purefb_userpolicy.LooseVersion")
+    @patch("plugins.modules.purefb_userpolicy.get_system")
+    @patch("plugins.modules.purefb_userpolicy.AnsibleModule")
+    def test_main_show_all_skips_user_lookup(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """main() used to concatenate account + name for the existence check even
+        when both were None (array-wide show), which raised TypeError."""
+        module = _make_module(context="", state="show", name=None, account=None)
+        module.params["policy"] = None
+        mock_ansible_module.return_value = module
+        blade = Mock()
+        blade.get_versions.return_value.items = ["2.17", "2.24"]
+        blade.get_object_store_access_policies.return_value.status_code = 200
+        blade.get_object_store_access_policies.return_value.items = [
+            _policy("pure:policy/full-access")
+        ]
+        mock_get_system.return_value = blade
+        mock_loose_version.return_value.__le__ = Mock(return_value=False)
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        blade.get_object_store_users.assert_not_called()
+        module.fail_json.assert_not_called()
+        module.exit_json.assert_called_once()
+        assert module.exit_json.call_args[1]["changed"] is False
+        assert module.exit_json.call_args[1]["policy_list"] == [
+            "pure:policy/full-access"
+        ]
