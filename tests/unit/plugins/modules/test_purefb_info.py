@@ -81,6 +81,8 @@ from plugins.modules.purefb_info import (
     generate_fs_dict,
     generate_array_conn_dict,
     generate_bucket_access_policies_dict,
+    generate_lag_dict,
+    generate_subnet_dict,
 )
 
 
@@ -1038,3 +1040,57 @@ class TestPurefbInfo:
         assert entry["enabled"] is True
         assert entry["local"] is True
         assert len(entry["rules"]) == 1
+
+    def test_generate_lag_dict_returns_empty_when_endpoint_errors(self):
+        """An array in Layer 3 (BGP) mode has no link aggregation groups and
+        the endpoint returns an error response, which carries no items. The
+        subset must come back empty instead of raising AttributeError."""
+        mock_blade = Mock()
+        error = Mock(spec=["status_code", "errors", "headers"])
+        error.status_code = 400
+        mock_blade.get_link_aggregation_groups.return_value = error
+
+        assert generate_lag_dict(mock_blade) == {}
+
+    def test_generate_lag_dict_tolerates_lag_without_ports(self):
+        """The SDK model defaults ports to None; iterate it as empty."""
+        mock_blade = Mock()
+        lag = Mock()
+        lag.name = "uplink"
+        lag.lag_speed = 0
+        lag.port_speed = 100000000000
+        lag.mac_address = "24:a9:37:f8:c0:63"
+        lag.status = "unused"
+        lag.ports = None
+        mock_blade.get_link_aggregation_groups.return_value = Mock(
+            status_code=200, items=[lag]
+        )
+
+        result = generate_lag_dict(mock_blade)
+
+        assert result["uplink"]["ports"] == []
+        assert result["uplink"]["status"] == "unused"
+
+    def test_generate_subnet_dict_tolerates_subnet_without_lag(self):
+        """BGP data subnets carry no LAG, VLAN or gateway, so the LAG
+        reference is None and must be reported as such, not dereferenced."""
+        mock_blade = Mock()
+        iface = Mock()
+        iface.name = "vip1"
+        sub = Mock()
+        sub.name = "net2"
+        sub.enabled = True
+        sub.gateway = None
+        sub.mtu = 1500
+        sub.vlan = None
+        sub.prefix = "10.255.9.0/24"
+        sub.services = ["data"]
+        sub.link_aggregation_group = None
+        sub.interfaces = [iface]
+        mock_blade.get_subnets.return_value.items = [sub]
+
+        result = generate_subnet_dict(mock_blade)
+
+        assert result["net2"]["lag"] is None
+        assert result["net2"]["vlan"] is None
+        assert result["net2"]["interfaces"] == [{"name": "vip1"}]

@@ -524,19 +524,24 @@ def generate_subnet_dict(blade):
                 "prefix": sub.prefix,
                 "services": sub.services,
             }
-            sub_info[sub_name]["lag"] = sub.link_aggregation_group.name
+            # Subnets on an array in Layer 3 (BGP) mode have no LAG
+            sub_info[sub_name]["lag"] = getattr(
+                sub.link_aggregation_group, "name", None
+            )
             sub_info[sub_name]["interfaces"] = []
-            for iface in range(len(sub.interfaces)):
-                sub_info[sub_name]["interfaces"].append(
-                    {"name": sub.interfaces[iface].name}
-                )
+            for iface in sub.interfaces or []:
+                sub_info[sub_name]["interfaces"].append({"name": iface.name})
     return sub_info
 
 
 def generate_lag_dict(blade):
     lag_info = {}
-    groups = list(blade.get_link_aggregation_groups().items)
-    for groupcnt in groups:
+    res = blade.get_link_aggregation_groups()
+    if res.status_code != 200:
+        # An array in Layer 3 (BGP) mode has no link aggregation groups
+        # and the endpoint returns an error rather than an empty list
+        return lag_info
+    for groupcnt in list(res.items):
         lag_name = groupcnt.name
         lag_info[lag_name] = {
             "lag_speed": groupcnt.lag_speed,
@@ -545,7 +550,7 @@ def generate_lag_dict(blade):
             "status": groupcnt.status,
         }
         lag_info[lag_name]["ports"] = []
-        for port in groupcnt.ports:
+        for port in groupcnt.ports or []:
             lag_info[lag_name]["ports"].append({"name": port.name})
     return lag_info
 
@@ -1544,17 +1549,13 @@ def main():
             info["password_policies"] = generate_password_policies_dict(blade)
         if LooseVersion(FLEET_API_VERSION) <= LooseVersion(api_version):
             info["fleet"] = generate_fleet_dict(blade)
-    if (
-        "drives" in subset
-        or "all" in subset
-        and LooseVersion(DRIVES_API_VERSION) <= LooseVersion(api_version)
-    ):
+    if ("drives" in subset or "all" in subset) and LooseVersion(
+        DRIVES_API_VERSION
+    ) <= LooseVersion(api_version):
         info["drives"] = generate_drives_dict(blade)
-    if (
-        "servers" in subset
-        or "all" in subset
-        and LooseVersion(SERVERS_API_VERSION) <= LooseVersion(api_version)
-    ):
+    if ("servers" in subset or "all" in subset) and LooseVersion(
+        SERVERS_API_VERSION
+    ) <= LooseVersion(api_version):
         info["servers"] = generate_servers_dict(blade)
     module.exit_json(changed=False, purefb_info=info)
 
