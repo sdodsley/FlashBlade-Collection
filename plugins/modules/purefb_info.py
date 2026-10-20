@@ -1854,6 +1854,12 @@ def main():
         DRIVES_API_VERSION
     ) <= LooseVersion(api_version):
         info["drives"] = generate_drives_dict(blade)
+    # `fleet` is a documented subset of its own; until now the data was only
+    # produced as part of `policies`, so gather_subset=fleet returned nothing.
+    if ("fleet" in subset or "all" in subset) and LooseVersion(
+        FLEET_API_VERSION
+    ) <= LooseVersion(api_version):
+        info["fleet"] = generate_fleet_dict(blade)
     if ("servers" in subset or "all" in subset) and LooseVersion(
         SERVERS_API_VERSION
     ) <= LooseVersion(api_version):

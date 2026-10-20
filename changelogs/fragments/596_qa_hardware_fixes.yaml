@@ -159,6 +159,8 @@ bugfixes:
     the bandwidth range check now rejects out-of-range values.
   - purefb_connect - ``state=absent`` no longer crashes with ``TypeError`` (the SDK item iterator
     was indexed directly), so an array connection can be removed again.
+  - purefb_info - ``gather_subset=fleet`` now returns the ``fleet`` section; previously the data
+    was only produced as part of the ``policies`` subset.
   - purefb_info - ``gather_subset=replication`` (and ``all``) no longer crashes with
     ``AttributeError`` when a filesystem replica link exists; the link status detail is read from
     the SDK's ``status_details`` attribute.

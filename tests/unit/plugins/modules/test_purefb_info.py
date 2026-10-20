@@ -1605,3 +1605,41 @@ class TestPurefbInfo:
         assert result["fs1"]["status_detail"] is None
         assert result["fs1"]["remote_fs"] == "peer:fs1"
         assert result["fs1"]["policies"] == ["daily"]
+
+    @patch("plugins.modules.purefb_info.LooseVersion")
+    @patch("plugins.modules.purefb_info.generate_fleet_dict")
+    @patch("plugins.modules.purefb_info.get_system")
+    @patch("plugins.modules.purefb_info.AnsibleModule")
+    def test_main_fleet_subset(
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_generate_fleet,
+        mock_loose_version,
+    ):
+        """gather_subset=fleet returns the fleet section on its own.
+
+        The data used to be produced only inside the policies subset, so the
+        documented fleet subset came back without a fleet key.
+        """
+        mock_module = Mock()
+        mock_module.params = {"gather_subset": ["fleet"]}
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_version = Mock()
+        mock_version.version = "2.21"
+        mock_blade.get_versions.return_value.items = [mock_version]
+        mock_get_system.return_value = mock_blade
+        # version gates ON
+        mock_loose_version.return_value.__le__ = Mock(return_value=True)
+
+        mock_generate_fleet.return_value = {"fleet1": {"members": {}}}
+
+        main()
+
+        mock_generate_fleet.assert_called_once_with(mock_blade)
+        call_args = mock_module.exit_json.call_args[1]
+        assert call_args["purefb_info"]["fleet"] == {"fleet1": {"members": {}}}
+        assert "policies" not in call_args["purefb_info"]
