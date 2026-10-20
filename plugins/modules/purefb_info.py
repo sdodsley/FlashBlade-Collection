@@ -35,7 +35,7 @@ options:
         Possible values for this include all, minimum, config, performance,
         capacity, network, subnets, lags, filesystems, snapshots, buckets,
         replication, policies, arrays, accounts, admins, ad, kerberos,
-        drives, servers and fleet.
+        drives, servers, fleet and realms.
       - The C(filesystems) subset surfaces the legacy file system keys
         C(nfs_rules), C(export_policy), C(smb_client_policy) and
         C(smb_share_policy). Purity//FB marks the underlying fields as
@@ -111,6 +111,7 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.time_utils imp
 from datetime import datetime, timezone
 import time
 
+KMIP_API_VERSION = "2.1"
 DRIVES_API_VERSION = "2.5"
 SECURITY_API_VERSION = "2.7"
 BUCKET_API_VERSION = "2.8"
@@ -120,9 +121,13 @@ PUBLIC_API_VERSION = "2.12"
 NAP_API_VERSION = "2.13"
 RA_DURATION_API_VERSION = "2.14"
 SMTP_ENCRYPT_API_VERSION = "2.15"
+WORM_API_VERSION = "2.15"
 SERVERS_API_VERSION = "2.16"
 PASSWORD_POLICY_API_VERSION = "2.16"
 FLEET_API_VERSION = "2.17"
+TLS_API_VERSION = "2.17"
+REALMS_API_VERSION = "2.19"
+S3_EXPORT_API_VERSION = "2.20"
 
 
 def _bytes_to_human(bytes_number):
@@ -149,6 +154,8 @@ def generate_default_dict(blade):
     defaults = list(blade.get_arrays().items)[0]
     default_info["flashblade_name"] = defaults.name
     default_info["purity_version"] = defaults.version
+    # the login (MOTD) banner, so purefb_banner changes can be read back
+    default_info["banner"] = getattr(defaults, "banner", None)
     default_info["filesystems"] = blade.get_file_systems().total_item_count
     default_info["snapshots"] = blade.get_file_system_snapshots().total_item_count
     default_info["buckets"] = blade.get_buckets().total_item_count
@@ -352,9 +359,13 @@ def generate_config_dict(blade):
             "services": getattr(config, "services", None),
         }
         if hasattr(config, "sources"):
-            config_info["dns"][config.name]["source"] = getattr(
-                config.sources, "name", None
-            )
+            # sources is a list of references (at most one), not a reference
+            sources = getattr(config, "sources", None)
+            if isinstance(sources, list):
+                source = getattr(sources[0], "name", None) if sources else None
+            else:
+                source = getattr(sources, "name", None)
+            config_info["dns"][config.name]["source"] = source
     smtp_config = list(blade.get_smtp_servers().items)
     config_info["smtp"] = {}
     for config in smtp_config:
@@ -417,13 +428,11 @@ def generate_config_dict(blade):
         )
         config_info["ssl_certs"][cert_name] = {
             "certificate": getattr(cert, "certificate", None),
-            "certificate_type": getattr(cert, "certificatei_type", None),
+            "certificate_type": getattr(cert, "certificate_type", None),
             "common_name": getattr(cert, "common_name", None),
             "country": getattr(cert, "country", None),
             "email": getattr(cert, "email", None),
-            "intermediate_certificate": getattr(
-                cert, "intermeadiate_certificate", None
-            ),
+            "intermediate_certificate": getattr(cert, "intermediate_certificate", None),
             "issued_by": getattr(cert, "issued_by", None),
             "issued_to": getattr(cert, "issued_to", None),
             "key_size": getattr(cert, "key_size", None),
@@ -487,6 +496,18 @@ def generate_config_dict(blade):
             config_info["snmp_managers"][mgr_name]["user"] = getattr(
                 manager.v3, "user", None
             )
+    if LooseVersion(KMIP_API_VERSION) <= LooseVersion(api_version):
+        config_info["kmip"] = {}
+        for kmip in list(blade.get_kmip().items):
+            config_info["kmip"][kmip.name] = {
+                "uris": getattr(kmip, "uris", None),
+                "ca_certificate": getattr(
+                    getattr(kmip, "ca_certificate", None), "name", None
+                ),
+                "ca_certificate_group": getattr(
+                    getattr(kmip, "ca_certificate_group", None), "name", None
+                ),
+            }
     if LooseVersion(SMTP_ENCRYPT_API_VERSION) <= LooseVersion(api_version):
         config_info["saml2sso"] = {}
         saml2 = list(blade.get_sso_saml2_idps().items)
@@ -623,7 +644,9 @@ def generate_file_repl_dict(blade):
             "link_type": file_link.link_type,
             "lag": file_link.lag,
             "status": file_link.status,
-            "status_detail": file_link.status_detail,
+            # the SDK model calls this status_details; the key is kept for
+            # backwards compatibility
+            "status_detail": getattr(file_link, "status_details", None),
             "remote_fs": file_link.remote.name
             + ":"
             + file_link.remote_file_system.name,
@@ -666,6 +689,18 @@ def generate_network_dict(blade):
     ports = list(blade.get_network_interfaces().items)
     for port in ports:
         int_name = port.name
+        # attached_servers is a list of references on the API even though an
+        # interface carries at most one server; the subnet comes back as a
+        # plain dict on current SDKs and as a reference on older ones.
+        attached = getattr(port, "attached_servers", None) or []
+        if not isinstance(attached, list):
+            attached = []
+        attached_names = [getattr(srv, "name", None) for srv in attached]
+        subnet = getattr(port, "subnet", None)
+        if isinstance(subnet, dict):
+            subnet_name = subnet.get("name")
+        else:
+            subnet_name = getattr(subnet, "name", None)
         net_info[int_name] = {
             "type": getattr(port, "type", None),
             "mtu": getattr(port, "mtu", None),
@@ -674,8 +709,9 @@ def generate_network_dict(blade):
             "services": getattr(port, "services", None),
             "gateway": getattr(port, "gateway", None),
             "netmask": getattr(port, "netmask", None),
-            "server": getattr(getattr(port, "server", None), "name", None),
-            "subnet": getattr(getattr(port, "subnet", None), "name", None),
+            "server": attached_names[0] if attached_names else None,
+            "attached_servers": attached_names,
+            "subnet": subnet_name,
             "enabled": port.enabled,
         }
     return net_info
@@ -1049,13 +1085,30 @@ def generate_bucket_cross_object_policies_dict(blade):
         res = blade.get_buckets_cross_origin_resource_sharing_policies(
             bucket_names=[bucket.name]
         )
+        if res.status_code != 200:
+            continue
 
         for policy in res.items:
+            # The allowed_* lists live on the rules, not on the policy.
             policies_info[policy.name] = {
-                "allowed_headers": policy.allowed_headers,
-                "allowed_methods": policy.allowed_methods,
-                "allowed_origins": policy.allowed_origins,
+                "enabled": getattr(policy, "enabled", None),
+                "local": getattr(policy, "is_local", None),
+                "rules": [],
             }
+            rules = blade.get_buckets_cross_origin_resource_sharing_policies_rules(
+                policy_names=[policy.name]
+            )
+            if rules.status_code != 200:
+                continue
+            for rule in rules.items:
+                policies_info[policy.name]["rules"].append(
+                    {
+                        "name": rule.name,
+                        "allowed_headers": getattr(rule, "allowed_headers", None),
+                        "allowed_methods": getattr(rule, "allowed_methods", None),
+                        "allowed_origins": getattr(rule, "allowed_origins", None),
+                    }
+                )
 
     return policies_info
 
@@ -1149,6 +1202,227 @@ def generate_smb_client_policies_dict(blade):
             )
 
     return policies_info
+
+
+def generate_smb_share_policies_dict(blade):
+    policies_info = {}
+
+    for policy in blade.get_smb_share_policies().items:
+        policy_name = policy.name
+        policies_info[policy_name] = {
+            "local": getattr(policy, "is_local", None),
+            "enabled": getattr(policy, "enabled", None),
+            "rules": [],
+        }
+
+        for rule in getattr(policy, "rules", None) or []:
+            policies_info[policy_name]["rules"].append(
+                {
+                    "name": rule.name,
+                    "principal": getattr(rule, "principal", None),
+                    "change": getattr(rule, "change", None),
+                    "full_control": getattr(rule, "full_control", None),
+                    "read": getattr(rule, "read", None),
+                }
+            )
+
+    return policies_info
+
+
+def generate_network_access_policies_dict(blade):
+    policies_info = {}
+
+    for policy in blade.get_network_access_policies().items:
+        policy_name = policy.name
+        policies_info[policy_name] = {
+            "local": getattr(policy, "is_local", None),
+            "enabled": getattr(policy, "enabled", None),
+            "version": getattr(policy, "version", None),
+            "rules": [],
+        }
+
+        for rule in getattr(policy, "rules", None) or []:
+            policies_info[policy_name]["rules"].append(
+                {
+                    "name": rule.name,
+                    "client": getattr(rule, "client", None),
+                    "effect": getattr(rule, "effect", None),
+                    "interfaces": getattr(rule, "interfaces", None),
+                    "index": getattr(rule, "index", None),
+                }
+            )
+
+    return policies_info
+
+
+def generate_worm_data_policies_dict(blade):
+    policies_info = {}
+
+    for policy in blade.get_worm_data_policies().items:
+        policies_info[policy.name] = {
+            "local": getattr(policy, "is_local", None),
+            "enabled": getattr(policy, "enabled", None),
+            "mode": getattr(policy, "mode", None),
+            "retention_lock": getattr(policy, "retention_lock", None),
+            "default_retention": getattr(policy, "default_retention", None),
+            "min_retention": getattr(policy, "min_retention", None),
+            "max_retention": getattr(policy, "max_retention", None),
+            "members": [],
+        }
+
+    for member in blade.get_worm_data_policies_members().items:
+        policy_name = getattr(getattr(member, "policy", None), "name", None)
+        if policy_name in policies_info:
+            policies_info[policy_name]["members"].append(
+                getattr(getattr(member, "member", None), "name", None)
+            )
+
+    return policies_info
+
+
+def generate_tls_policies_dict(blade):
+    policies_info = {}
+
+    for policy in blade.get_tls_policies().items:
+        policies_info[policy.name] = {
+            "local": getattr(policy, "is_local", None),
+            "enabled": getattr(policy, "enabled", None),
+            "appliance_certificate": getattr(
+                getattr(policy, "appliance_certificate", None), "name", None
+            ),
+            "min_tls_version": getattr(policy, "min_tls_version", None),
+            "enabled_tls_ciphers": getattr(policy, "enabled_tls_ciphers", None),
+            "disabled_tls_ciphers": getattr(policy, "disabled_tls_ciphers", None),
+            "client_certificates_required": getattr(
+                policy, "client_certificates_required", None
+            ),
+            "verify_client_certificate_trust": getattr(
+                policy, "verify_client_certificate_trust", None
+            ),
+            "trusted_client_certificate_authority": getattr(
+                getattr(policy, "trusted_client_certificate_authority", None),
+                "name",
+                None,
+            ),
+            "network_interfaces": [],
+        }
+
+    for member in blade.get_tls_policies_network_interfaces().items:
+        policy_name = getattr(getattr(member, "policy", None), "name", None)
+        if policy_name in policies_info:
+            policies_info[policy_name]["network_interfaces"].append(
+                getattr(getattr(member, "member", None), "name", None)
+            )
+
+    return policies_info
+
+
+def generate_s3_export_policies_dict(blade):
+    policies_info = {}
+
+    for policy in blade.get_s3_export_policies().items:
+        policy_name = policy.name
+        policies_info[policy_name] = {
+            "local": getattr(policy, "is_local", None),
+            "enabled": getattr(policy, "enabled", None),
+            "rules": [],
+        }
+
+        for rule in getattr(policy, "rules", None) or []:
+            policies_info[policy_name]["rules"].append(
+                {
+                    "name": rule.name,
+                    "actions": getattr(rule, "actions", None),
+                    "effect": getattr(rule, "effect", None),
+                    "resources": getattr(rule, "resources", None),
+                }
+            )
+
+    return policies_info
+
+
+def generate_object_store_account_exports_dict(blade):
+    exports_info = {}
+
+    for export in blade.get_object_store_account_exports().items:
+        exports_info[export.name] = {
+            "enabled": getattr(export, "enabled", None),
+            "account": getattr(getattr(export, "member", None), "name", None),
+            "policy": getattr(getattr(export, "policy", None), "name", None),
+            "server": getattr(getattr(export, "server", None), "name", None),
+        }
+
+    return exports_info
+
+
+def generate_object_store_virtual_hosts_dict(blade):
+    vhosts_info = {}
+
+    for vhost in blade.get_object_store_virtual_hosts().items:
+        attached = getattr(vhost, "attached_servers", None) or []
+        if not isinstance(attached, list):
+            attached = []
+        vhosts_info[vhost.name] = {
+            # Before REST 2.20 the name is the hostname
+            "hostname": getattr(vhost, "hostname", None) or vhost.name,
+            "attached_servers": [getattr(srv, "name", None) for srv in attached],
+        }
+
+    return vhosts_info
+
+
+def generate_realms_dict(blade):
+    realms_info = {}
+
+    for realm in blade.get_realms().items:
+        space = getattr(realm, "space", None)
+        created = getattr(realm, "created", None)
+        realms_info[realm.name] = {
+            "created": (
+                datetime.fromtimestamp(created / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                if created
+                else None
+            ),
+            "destroyed": getattr(realm, "destroyed", None),
+            "time_remaining": getattr(realm, "time_remaining", None),
+            "default_inbound_tls_policy": getattr(
+                getattr(realm, "default_inbound_tls_policy", None), "name", None
+            ),
+            "space": {
+                "data_reduction": getattr(space, "data_reduction", None),
+                "snapshots": getattr(space, "snapshots", None),
+                "total_physical": getattr(space, "total_physical", None),
+                "total_used": getattr(space, "total_used", None),
+                "unique": getattr(space, "unique", None),
+                "virtual": getattr(space, "virtual", None),
+                "total_provisioned": getattr(space, "total_provisioned", None),
+                "available_provisioned": getattr(space, "available_provisioned", None),
+                "available_ratio": getattr(space, "available_ratio", None),
+                "destroyed": getattr(space, "destroyed", None),
+                "destroyed_virtual": getattr(space, "destroyed_virtual", None),
+            },
+        }
+
+    return realms_info
+
+
+def generate_resource_accesses_dict(blade):
+    accesses_info = []
+
+    for access in blade.get_resource_accesses().items:
+        resource = getattr(access, "resource", None)
+        scope = getattr(access, "scope", None)
+        accesses_info.append(
+            {
+                "id": getattr(access, "id", None),
+                "resource": getattr(resource, "name", None),
+                "resource_type": getattr(resource, "resource_type", None),
+                "scope": getattr(scope, "name", None),
+                "scope_type": getattr(scope, "resource_type", None),
+            }
+        )
+
+    return accesses_info
 
 
 def generate_password_policies_dict(blade):
@@ -1296,7 +1570,9 @@ def generate_fs_dict(blade, exports=None):
             "http": fsystem.http.enabled,
             "smb_mode": getattr(smb, "acl_mode", None),
             "multi_protocol": {
+                # safegaurd_acls is kept for backwards compatibility
                 "safegaurd_acls": getattr(multi, "safeguard_acls", None),
+                "safeguard_acls": getattr(multi, "safeguard_acls", None),
                 "access_control_style": getattr(multi, "access_control_style", None),
             },
             "hard_limit": fsystem.hard_limit_enabled,
@@ -1482,6 +1758,7 @@ def main():
         "drives",
         "servers",
         "fleet",
+        "realms",
     )
     subset_test = (test in valid_subsets for test in subset)
     if not all(subset_test):
@@ -1518,6 +1795,9 @@ def main():
         info["snapshots"] = generate_snap_dict(blade)
     if "buckets" in subset or "all" in subset:
         info["buckets"] = generate_bucket_dict(blade)
+        info["object_store_virtual_hosts"] = generate_object_store_virtual_hosts_dict(
+            blade
+        )
     if "policies" in subset or "all" in subset:
         info["policies"] = generate_all_policies_dict(blade)
         info["snapshot_policies"] = generate_policies_dict(blade)
@@ -1531,6 +1811,10 @@ def main():
         info["targets"] = generate_targets_dict(blade)
     if "accounts" in subset or "all" in subset:
         info["accounts"] = generate_object_store_accounts_dict(blade)
+        if LooseVersion(S3_EXPORT_API_VERSION) <= LooseVersion(api_version):
+            info["object_store_account_exports"] = (
+                generate_object_store_account_exports_dict(blade)
+            )
     if "ad" in subset or "all" in subset:
         info["active_directory"] = generate_ad_dict(blade)
     if "kerberos" in subset or "all" in subset:
@@ -1544,15 +1828,40 @@ def main():
             )
         info["export_policies"] = generate_nfs_export_policies_dict(blade)
         if LooseVersion(SMB_CLIENT_API_VERSION) <= LooseVersion(api_version):
-            info["share_policies"] = generate_smb_client_policies_dict(blade)
+            # share_policies has always held the SMB *client* policies; it is
+            # kept for backwards compatibility alongside the correct key.
+            info["smb_client_policies"] = generate_smb_client_policies_dict(blade)
+            info["share_policies"] = info["smb_client_policies"]
+            info["smb_share_policies"] = generate_smb_share_policies_dict(blade)
+        if LooseVersion(NAP_API_VERSION) <= LooseVersion(api_version):
+            info["network_access_policies"] = generate_network_access_policies_dict(
+                blade
+            )
+        if LooseVersion(WORM_API_VERSION) <= LooseVersion(api_version):
+            info["worm_data_policies"] = generate_worm_data_policies_dict(blade)
         if LooseVersion(PASSWORD_POLICY_API_VERSION) <= LooseVersion(api_version):
             info["password_policies"] = generate_password_policies_dict(blade)
         if LooseVersion(FLEET_API_VERSION) <= LooseVersion(api_version):
             info["fleet"] = generate_fleet_dict(blade)
+        if LooseVersion(TLS_API_VERSION) <= LooseVersion(api_version):
+            info["tls_policies"] = generate_tls_policies_dict(blade)
+        if LooseVersion(S3_EXPORT_API_VERSION) <= LooseVersion(api_version):
+            info["s3_export_policies"] = generate_s3_export_policies_dict(blade)
+    if ("realms" in subset or "all" in subset) and LooseVersion(
+        REALMS_API_VERSION
+    ) <= LooseVersion(api_version):
+        info["realms"] = generate_realms_dict(blade)
+        info["resource_accesses"] = generate_resource_accesses_dict(blade)
     if ("drives" in subset or "all" in subset) and LooseVersion(
         DRIVES_API_VERSION
     ) <= LooseVersion(api_version):
         info["drives"] = generate_drives_dict(blade)
+    # `fleet` is a documented subset of its own; until now the data was only
+    # produced as part of `policies`, so gather_subset=fleet returned nothing.
+    if ("fleet" in subset or "all" in subset) and LooseVersion(
+        FLEET_API_VERSION
+    ) <= LooseVersion(api_version):
+        info["fleet"] = generate_fleet_dict(blade)
     if ("servers" in subset or "all" in subset) and LooseVersion(
         SERVERS_API_VERSION
     ) <= LooseVersion(api_version):

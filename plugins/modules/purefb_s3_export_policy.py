@@ -194,15 +194,18 @@ def _normalize_existing_rule(rule_obj):
     }
 
 
-def _get_policy(module, blade):
-    """Return the existing policy object or None."""
-    res = blade.get_s3_export_policies(
-        names=[module.params["name"]], **_context_kwargs(module)
-    )
+def _get_policy_by_name(module, blade, name):
+    """Return the policy object called name, or None."""
+    res = blade.get_s3_export_policies(names=[name], **_context_kwargs(module))
     if res.status_code != 200:
         return None
     items = list(res.items)
     return items[0] if items else None
+
+
+def _get_policy(module, blade):
+    """Return the existing policy object or None."""
+    return _get_policy_by_name(module, blade, module.params["name"])
 
 
 def _get_policy_rules(module, blade):
@@ -341,6 +344,14 @@ def create_policy(module, blade):
 def update_policy(module, blade, policy):
     """Update an existing S3 export policy."""
     changed = False
+
+    if module.params["rules"] is not None:
+        # Reconcile the rules first, under the policy's current name. A rename
+        # (if any) is applied afterwards so the rule calls address a name that
+        # still exists.
+        if _reconcile_rules(module, blade, module.params["rules"]):
+            changed = True
+
     patch_kwargs = {}
 
     if module.params["enabled"] is not None and module.params["enabled"] != getattr(
@@ -367,11 +378,6 @@ def update_policy(module, blade, policy):
                         module.params["name"], get_error_message(res)
                     )
                 )
-
-    if module.params["rules"] is not None:
-        # Reconcile against the *current* name (rename, if any, is applied after).
-        if _reconcile_rules(module, blade, module.params["rules"]):
-            changed = True
 
     module.exit_json(changed=changed)
 
@@ -412,18 +418,31 @@ def main():
         )
 
     if not module.params["context"]:
-        # If no context is provided set the context to the local array name
-        module.params["context"] = list(blade.get_arrays().items)[0].name
+        # Only default the context to the local array name when this array is a
+        # member of a fleet. A standalone array rejects any fleet context
+        # ("Cannot find array in fleet: not in a fleet"), so leave context
+        # unset - no context_names is then sent.
+        fleet_res = blade.get_fleets()
+        if fleet_res.status_code == 200 and list(fleet_res.items):
+            module.params["context"] = list(blade.get_arrays().items)[0].name
 
     state = module.params["state"]
     policy = _get_policy(module, blade)
 
     if module.params["rename"] and policy is None:
-        module.fail_json(
-            msg="Cannot rename S3 export policy {0}: policy does not exist.".format(
-                module.params["name"]
+        # The rename may already have happened on an earlier run: if a policy
+        # with the new name exists, manage it under that name and treat the
+        # rename as done, so a repeated rename task is idempotent.
+        renamed = _get_policy_by_name(module, blade, module.params["rename"])
+        if renamed is None:
+            module.fail_json(
+                msg="Cannot rename S3 export policy {0}: policy does not exist.".format(
+                    module.params["name"]
+                )
             )
-        )
+        module.params["name"] = module.params["rename"]
+        module.params["rename"] = None
+        policy = renamed
 
     if state == "present" and policy is None:
         create_policy(module, blade)

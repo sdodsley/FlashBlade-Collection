@@ -125,8 +125,11 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 def rotate_keytab(module, blade):
     """Rotate keytab"""
     changed = True
+    res = blade.get_active_directory()
+    if res.status_code != 200 or res.total_item_count == 0:
+        module.fail_json(msg="No active directory account configured to rotate")
     account = Reference(
-        name=list(blade.get_active_directory().items)[0].name,
+        name=list(res.items)[0].name,
         resource_type="active-directory",
     )
     keytab = KeytabPost(source=account)
@@ -183,10 +186,10 @@ def import_keytab(module, blade):
 
 def export_keytab(module, blade):
     """Export keytab"""
+    # Exporting is a read; it never changes the array.
     changed = False
     download_file = ""
     if blade.get_keytabs(names=[module.params["name"]]).status_code == 200:
-        changed = True
         if not module.check_mode:
             res = blade.get_keytabs_download(keytab_names=[module.params["name"]])
             if res.status_code != 200:

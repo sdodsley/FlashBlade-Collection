@@ -86,9 +86,11 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.common import 
 
 def delete_ntp(module, blade):
     """Delete NTP Servers"""
-    changed = True
-    if not module.check_mode:
-        if list(blade.get_arrays().items)[0].ntp_servers != []:
+    changed = False
+    current_servers = list(blade.get_arrays().items)[0].ntp_servers or []
+    if current_servers:
+        changed = True
+        if not module.check_mode:
             res = blade.patch_arrays(array=Array(ntp_servers=[]))
             if res.status_code != 200:
                 module.fail_json(
@@ -141,9 +143,8 @@ def main():
         delete_ntp(module, blade)
     else:
         module.params["ntp_servers"] = remove_duplicates(module.params["ntp_servers"])
-        if sorted(list(blade.get_arrays().items)[0].ntp_servers) != sorted(
-            module.params["ntp_servers"][0:4]
-        ):
+        current_servers = list(blade.get_arrays().items)[0].ntp_servers or []
+        if sorted(current_servers) != sorted(module.params["ntp_servers"][0:4]):
             create_ntp(module, blade)
 
     module.exit_json(changed=False)

@@ -27,11 +27,15 @@ author:
 options:
   resource_type:
     description:
-      - The type of resource you want to add.
+      - The type of resource you want to add, given as the REST collection
+        name of the resource.
       - The set of valid resource types is defined by the array and grows
         with the REST API version, so it is not validated by this module.
-        Examples are C(dns), C(subnets), C(network-interfaces) and
-        C(policies/nfs).
+      - For a realm scope, Purity//FB 4.6 accepts the array-level resources
+        that can be delegated to a realm, C(subnets) and C(dns).
+      - Policies (for example NFS export policies) live at the array level
+        and cannot be shared with a realm through a resource access; the
+        array rejects them with C(Invalid resource type).
     type: str
     required: true
   resource_name:
@@ -65,7 +69,7 @@ extends_documentation_fragment:
 """
 
 EXAMPLES = r"""
-- name: Create new resource access for between realm and subnet
+- name: Delegate subnet subnet_foo to realm realm_foo
   everpure.flashblade.purefb_resource_access:
     resource_type: subnets
     resource_name: subnet_foo
@@ -74,7 +78,7 @@ EXAMPLES = r"""
     fb_url: 10.10.10.2
     api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
 
-- name: Create new resource access for between realm and management DNS
+- name: Share the management DNS configuration with realm realm_foo
   everpure.flashblade.purefb_resource_access:
     resource_type: dns
     resource_name: management
@@ -83,7 +87,7 @@ EXAMPLES = r"""
     fb_url: 10.10.10.2
     api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
 
-- name: Delete resource access for between realm and subnet (Not deleting the subnet)
+- name: Revoke the subnet delegation (the subnet itself is not deleted)
   everpure.flashblade.purefb_resource_access:
     resource_type: subnets
     resource_name: subnet_foo

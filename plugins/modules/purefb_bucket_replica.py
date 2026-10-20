@@ -402,22 +402,32 @@ def main():
 
     local_bucket = get_local_bucket(module, blade)
 
-    if not module.params["target"] and not local_replica_link:
+    if module.params["target"]:
+        target = get_connected(module, blade)
+        if not target:
+            module.fail_json(
+                msg="Selected target {0} is not connected.".format(
+                    module.params["target"]
+                )
+            )
+    elif local_replica_link:
+        # An existing link already knows its remote; use it to look up the
+        # credential when the caller did not repeat the target.
+        target = local_replica_link.remote.name
+        module.params["target"] = target
+    else:
         module.fail_json(
             msg="target parameter is required when creating a new replica link"
-        )
-
-    target = get_connected(module, blade) if module.params["target"] else None
-
-    if module.params["target"] and not target:
-        module.fail_json(
-            msg="Selected target {0} is not connected.".format(module.params["target"])
         )
 
     if local_replica_link and not module.params["credential"]:
         module.params["credential"] = local_replica_link.remote_credentials.name.split(
             "/"
         )[1]
+    if not module.params["credential"]:
+        module.fail_json(
+            msg="credential parameter is required when creating a new replica link"
+        )
     remote_cred = get_remote_cred(module, blade, target)
     if not remote_cred:
         module.fail_json(

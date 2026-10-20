@@ -80,6 +80,7 @@ from plugins.modules.purefb_mgmt_policy import (
     _get_current_rules,
     _members_attached,
     _build_post_rules,
+    _inline_rules_differ,
     _reconcile_rules,
     create_policy,
     update_policy,
@@ -99,6 +100,21 @@ def _base_params(**overrides):
     }
     params.update(overrides)
     return params
+
+
+def _inline_rule(role, resource_type, name):
+    """A rule as the array returns it inside the policy object (REST < 2.26)."""
+    rule = Mock()
+    rule.role = Mock()
+    rule.role.name = role
+    rule.scope = Mock()
+    rule.scope.resource_type = resource_type
+    rule.scope.name = name
+    return rule
+
+
+def _rule_spec(role, name="fb1", resource_type="arrays"):
+    return {"role": role, "scope": {"name": name, "resource_type": resource_type}}
 
 
 class TestPurefbMgmtPolicy:
@@ -1311,15 +1327,19 @@ class TestPurefbMgmtPolicy:
         assert "2.19+" in msg
 
     @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
+    @patch("plugins.modules.purefb_mgmt_policy.ManagementAccessPolicyPost")
     @patch("plugins.modules.purefb_mgmt_policy.get_system")
     @patch("plugins.modules.purefb_mgmt_policy.AnsibleModule")
     @patch("plugins.modules.purefb_mgmt_policy.HAS_PYPURECLIENT", True)
-    def test_main_fails_when_rules_requested_on_2_19(
-        self, mock_ansible_module, mock_get_system, mock_loose_version
+    def test_main_creates_policy_with_rules_on_2_19(
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_post_cls,
+        mock_loose_version,
     ):
-        """Test main fails when rules param is set but API is < 2.26"""
-        # policy gate passes (False), rule gate fails (True)
-        mock_loose_version.return_value.__gt__ = Mock(side_effect=[False, True])
+        """Test main sends rules inline with the POST on REST < 2.26 instead of failing"""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
 
         mock_module = Mock()
         mock_module.exit_json = Mock(side_effect=SystemExit)
@@ -1339,6 +1359,216 @@ class TestPurefbMgmtPolicy:
         mock_blade.get_versions.return_value.items = ["2.19"]
         mock_get_system.return_value = mock_blade
 
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_management_access_policies.return_value = get_response
+
+        post_response = Mock()
+        post_response.status_code = 200
+        mock_blade.post_management_access_policies.return_value = post_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_not_called()
+        mock_blade.post_management_access_policies.assert_called_once()
+        assert len(mock_post_cls.call_args[1]["rules"]) == 1
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
+    def test_update_policy_inline_rules_idempotent_below_2_26(self, mock_loose_version):
+        """Test update_policy on REST < 2.26 compares the inline rule list and skips PATCH"""
+        # MIN_RULE_API_VERSION > api_version -> inline path
+        mock_loose_version.return_value.__gt__ = Mock(return_value=True)
+
+        mock_module = Mock()
+        mock_module.params = _base_params(
+            rules=[
+                {
+                    "role": "viewer",
+                    "scope": {"name": "fb1", "resource_type": "arrays"},
+                }
+            ]
+        )
+        mock_module.check_mode = False
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+
+        rule = Mock()
+        rule.role = Mock()
+        rule.role.name = "Viewer"
+        rule.scope = Mock()
+        rule.scope.resource_type = "arrays"
+        rule.scope.name = "FB1"
+        existing = Mock()
+        existing.enabled = True
+        existing.aggregation_strategy = None
+        existing.rules = [rule]
+
+        mock_blade = Mock()
+
+        try:
+            update_policy(mock_module, mock_blade, {}, existing, "2.21")
+        except SystemExit:
+            pass
+
+        mock_blade.get_management_access_policies_rules.assert_not_called()
+        mock_blade.patch_management_access_policies.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
+    @patch("plugins.modules.purefb_mgmt_policy.ManagementAccessPolicy")
+    def test_update_policy_inline_rules_replaced_below_2_26(
+        self, mock_patch_cls, mock_loose_version
+    ):
+        """Test update_policy on REST < 2.26 PATCHes the whole rule list when it differs"""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=True)
+
+        mock_module = Mock()
+        mock_module.params = _base_params(
+            rules=[
+                {
+                    "role": "viewer",
+                    "scope": {"name": "fb1", "resource_type": "arrays"},
+                }
+            ]
+        )
+        mock_module.check_mode = False
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+
+        existing = Mock()
+        existing.enabled = True
+        existing.aggregation_strategy = None
+        existing.rules = []
+
+        mock_blade = Mock()
+        patch_response = Mock()
+        patch_response.status_code = 200
+        mock_blade.patch_management_access_policies.return_value = patch_response
+
+        try:
+            update_policy(mock_module, mock_blade, {}, existing, "2.21")
+        except SystemExit:
+            pass
+
+        mock_blade.get_management_access_policies_rules.assert_not_called()
+        mock_blade.patch_management_access_policies.assert_called_once()
+        assert len(mock_patch_cls.call_args[1]["rules"]) == 1
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    # ---------------- _inline_rules_differ tests (REST < 2.26) ----------------
+
+    def test_inline_rules_same_as_created_is_not_a_change(self):
+        """Re-declaring the rule the policy was created with, in any case, is a no-op"""
+        mock_module = Mock()
+        mock_module.params = _base_params(rules=[_rule_spec("viewer")])
+        existing = Mock()
+        existing.rules = [_inline_rule("Viewer", "ARRAYS", "FB1")]
+
+        assert _inline_rules_differ(mock_module, existing) is False
+
+    def test_inline_rules_different_role_is_a_change(self):
+        """Same scope, different role: the list must be replaced"""
+        mock_module = Mock()
+        mock_module.params = _base_params(rules=[_rule_spec("storage")])
+        existing = Mock()
+        existing.rules = [_inline_rule("viewer", "arrays", "fb1")]
+
+        assert _inline_rules_differ(mock_module, existing) is True
+
+    def test_inline_rules_added_rule_is_a_change(self):
+        """A second rule on top of the existing one is a change"""
+        mock_module = Mock()
+        mock_module.params = _base_params(
+            rules=[_rule_spec("viewer"), _rule_spec("support")]
+        )
+        existing = Mock()
+        existing.rules = [_inline_rule("viewer", "arrays", "fb1")]
+
+        assert _inline_rules_differ(mock_module, existing) is True
+
+    def test_inline_rules_empty_desired(self):
+        """rules: [] differs while rules exist and is a no-op once they are gone"""
+        mock_module = Mock()
+        mock_module.params = _base_params(rules=[])
+
+        existing = Mock()
+        existing.rules = [_inline_rule("viewer", "arrays", "fb1")]
+        assert _inline_rules_differ(mock_module, existing) is True
+
+        existing.rules = []
+        assert _inline_rules_differ(mock_module, existing) is False
+
+        existing.rules = None
+        assert _inline_rules_differ(mock_module, existing) is False
+
+    def test_inline_rules_tolerates_missing_references(self):
+        """A rule whose role or scope reference is null does not raise"""
+        mock_module = Mock()
+        mock_module.params = _base_params(rules=[_rule_spec("viewer")])
+        broken = Mock()
+        broken.role = None
+        broken.scope = None
+        existing = Mock()
+        existing.rules = [broken]
+
+        assert _inline_rules_differ(mock_module, existing) is True
+
+    @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
+    @patch("plugins.modules.purefb_mgmt_policy.ManagementAccessPolicy")
+    def test_update_policy_inline_rules_role_change_below_2_26(
+        self, mock_patch_cls, mock_loose_version
+    ):
+        """On REST 2.21 changing the role of the only rule PATCHes the policy once"""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=True)
+
+        mock_module = Mock()
+        mock_module.params = _base_params(rules=[_rule_spec("storage")])
+        mock_module.check_mode = False
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+
+        existing = Mock()
+        existing.enabled = True
+        existing.aggregation_strategy = None
+        existing.rules = [_inline_rule("viewer", "arrays", "fb1")]
+
+        mock_blade = Mock()
+        patch_response = Mock()
+        patch_response.status_code = 200
+        mock_blade.patch_management_access_policies.return_value = patch_response
+
+        try:
+            update_policy(mock_module, mock_blade, {}, existing, "2.21")
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_not_called()
+        mock_blade.patch_management_access_policies.assert_called_once()
+        assert len(mock_patch_cls.call_args[1]["rules"]) == 1
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
+    @patch("plugins.modules.purefb_mgmt_policy.get_system")
+    @patch("plugins.modules.purefb_mgmt_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_mgmt_policy.HAS_PYPURECLIENT", True)
+    def test_main_refuses_to_modify_builtin_management_policy(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """Test the built-in guard covers the management policy"""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = _base_params(name="management", enabled=False)
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
         try:
             main()
         except SystemExit:
@@ -1346,8 +1576,8 @@ class TestPurefbMgmtPolicy:
 
         mock_module.fail_json.assert_called_once()
         msg = mock_module.fail_json.call_args[1]["msg"]
-        assert "does not support rule management on policies" in msg
-        assert "2.26+" in msg
+        assert "Built-in policy management cannot be modified or deleted" in msg
+        mock_get_system.assert_not_called()
 
     @patch("plugins.modules.purefb_mgmt_policy.LooseVersion")
     @patch("plugins.modules.purefb_mgmt_policy.get_system")

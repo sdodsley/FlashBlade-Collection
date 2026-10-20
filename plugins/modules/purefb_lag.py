@@ -42,6 +42,8 @@ options:
       ETHy is the ethernet port number.
     - Matched port pairs from each Fabric Module in the Chassis will
       be used.
+    - A fully qualified port name of the form CHx.FMy.ETHz is also
+      accepted and used as given.
     - To modify required ports for a LAG specify only the ports required
       by the LAG. Any ports currently used by the LAG not specified will be
       disconnected from the LAG.
@@ -99,7 +101,7 @@ lag:
 
 HAS_PYPURECLIENT = True
 try:
-    from pypureclient.flashblade import Reference, FixedReference, LinkAggregationGroup
+    from pypureclient.flashblade import Reference, LinkAggregationGroup
 except ImportError:
     HAS_PYPURECLIENT = False
 
@@ -111,6 +113,34 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import 
 from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
     get_error_message,
 )
+
+
+def normalize_port(module, port):
+    """Return the CHx.FMy.ETHz port names a requested port expands to
+
+    CHx.ETHy expands to the matching port on both Fabric Modules. A fully
+    qualified CHx.FMy.ETHz name, or an X-prefixed port, is used as given.
+    """
+    port = port.upper()
+    if port[0] == "X":
+        return [port]
+    parts = port.split(".")
+    if len(parts) == 3:
+        return [port]
+    if len(parts) != 2:
+        module.fail_json(
+            msg="Invalid port name {0}. Format must be CHx.ETHy".format(port)
+        )
+    return [f"{parts[0]}.FM1.{parts[1]}", f"{parts[0]}.FM2.{parts[1]}"]
+
+
+def get_used_ports(blade):
+    """Return the names of all ports currently assigned to any LAG"""
+    return [
+        port.name
+        for lag in blade.get_link_aggregation_groups().items
+        for port in (lag.ports or [])
+    ]
 
 
 def delete_lag(module, blade):
@@ -132,29 +162,16 @@ def update_lag(module, blade):
     changed = False
     lagfact = []
 
-    def normalize_port(port):
-        """Return standardized port names for comparison and assignment"""
-        if port.upper()[0] == "X":
-            return [port.upper()]
-        base, idx = port.split(".")
-        base = base.upper()
-        idx = idx.upper()
-        return [f"{base}.FM1.{idx}", f"{base}.FM2.{idx}"]
-
     # Get current LAG ports
     current_lag = list(
         blade.get_link_aggregation_groups(names=[module.params["name"]]).items
     )[0]
-    used_ports = [port.name for port in current_lag.ports]
+    used_ports = [port.name for port in (current_lag.ports or [])]
 
     # Check if any requested port is already used in other LAGs
-    all_current_ports = [
-        port.name
-        for lag in blade.get_link_aggregation_groups().items
-        for port in lag.ports
-    ]
+    all_current_ports = get_used_ports(blade)
     for port in module.params["ports"]:
-        for norm_port in normalize_port(port):
+        for norm_port in normalize_port(module, port):
             if norm_port in all_current_ports and norm_port not in used_ports:
                 module.fail_json(
                     msg=f"Selected port {port.upper()} is currently in use by another LAG."
@@ -162,7 +179,7 @@ def update_lag(module, blade):
 
     # Build list of new ports
     new_ports = [
-        norm for port in module.params["ports"] for norm in normalize_port(port)
+        norm for port in module.params["ports"] for norm in normalize_port(module, port)
     ]
     ports_refs = [Reference(name=p) for p in new_ports]
 
@@ -193,37 +210,20 @@ def update_lag(module, blade):
 def create_lag(module, blade):
     """Create Link Aggregation Group"""
     changed = True
-    used_ports = []
     lagfact = []
-    current_lags = list(blade.get_link_aggregation_groups().items)
-    for lag in current_lags:
-        for port in lag.ports:
-            used_ports.append(lag.port.name)
-    for lag_port in module.params["ports"]:
-        if (
-            lag_port.split(".")[0].upper()
-            + ".FM1."
-            + module.params["ports"][0].split(".")[1].upper()
-        ) in used_ports:
-            module.fail_json(
-                msg="Selected port {0} is currently in use by another LAG.".format(
-                    lag_port.upper()
-                )
-            )
+    used_ports = get_used_ports(blade)
     new_ports = []
-    for new_port in module.params["ports"]:
-        new_ports.append(
-            new_port.split(".")[0].upper() + ".FM1." + new_port.split(".")[1].upper()
-        )
-        new_ports.append(
-            new_port.split(".")[0].upper() + ".FM2." + new_port.split(".")[1].upper()
-        )
-    ports = []
-    module.warn("new_ports: {0}".format(new_ports))
-    for final_port in new_ports:
-        ports.append(FixedReference(name=final_port))
+    for lag_port in module.params["ports"]:
+        for norm_port in normalize_port(module, lag_port):
+            if norm_port in used_ports:
+                module.fail_json(
+                    msg="Selected port {0} is currently in use by another LAG.".format(
+                        lag_port.upper()
+                    )
+                )
+            new_ports.append(norm_port)
+    ports = [Reference(name=final_port) for final_port in new_ports]
     link_aggregation_group = LinkAggregationGroup(ports=ports)
-    module.warn("LAG: {0}".format(link_aggregation_group))
     if not module.check_mode:
         res = blade.post_link_aggregation_groups(
             names=[module.params["name"]], link_aggregation_group=link_aggregation_group

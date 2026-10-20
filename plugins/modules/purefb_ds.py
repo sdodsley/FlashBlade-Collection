@@ -23,9 +23,10 @@ description:
 - Create, modify or erase directory services configurations. There is no
   facility to SSL certificates at this time. Use the FlashBlade GUI for this
   additional configuration work.
-- If updating a directory service and i(bind_password) is provided this
+- If updating a directory service and I(bind_password) is provided this
   will always cause a change, even if the password given isn't different from
-  the current. This makes this part of the module non-idempotent..
+  the current, unless I(force_bind_password) is C(false). The array never
+  reports the password, so the module cannot compare it.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -44,7 +45,8 @@ options:
   enable:
     description:
     - Whether to enable or disable directory service support.
-    default: false
+    - If not specified an existing service keeps its current state and a
+      new service is created disabled.
     type: bool
   uri:
     description:
@@ -66,6 +68,7 @@ options:
   bind_password:
     description:
     - Sets the password of the bind_user user name account.
+    - Required when I(uri) or I(bind_user) change an existing service.
     type: str
   force_bind_password:
     type: bool
@@ -75,6 +78,7 @@ options:
       is unchanged.
     - If set to I(false) and I(bind_user) is unchanged the password will not
       be reset.
+    - Has no effect when I(bind_password) is not provided.
     version_added: 1.16.0
   bind_user:
     description:
@@ -265,7 +269,7 @@ def delete_ds(module, blade):
                     bind_password="",
                     enabled=False,
                 )
-            elif dirserv.nfs.nis_domains:
+            elif getattr(dirserv.nfs, "nis_domains", None):
                 nfs_attrs = {"nis_domains": [], "nis_servers": []}
                 dir_service = DirectoryService(nfs=nfs_attrs, enabled=False)
             else:
@@ -301,14 +305,19 @@ def update_ds(module, blade):
             )
         )
     ds_now = list(res.items)[0]
+    # `enable` has no default, so a value is only applied when it was given.
+    if (
+        module.params["enable"] is not None
+        and module.params["enable"] != ds_now.enabled
+    ):
+        attr["enabled"] = module.params["enable"]
+        mod_ds = True
     if module.params["dstype"] == "nfs" and module.params["nis_servers"]:
-        if module.params["enable"]:
-            if module.params["enable"] != ds_now.enabled:
-                attr["enabled"] = module.params["enable"]
-                mod_ds = True
+        current_nis_servers = getattr(ds_now.nfs, "nis_servers", None) or []
+        current_nis_domains = getattr(ds_now.nfs, "nis_domains", None) or []
         if sorted(module.params["nis_servers"]) != sorted(
-            ds_now.nfs.nis_servers
-        ) or module.params["nis_domain"] != "".join(map(str, ds_now.nfs.nis_domains)):
+            current_nis_servers
+        ) or module.params["nis_domain"] != "".join(map(str, current_nis_domains)):
             attr["nfs"] = {
                 "nis_domains": [module.params["nis_domain"]],
                 "nis_servers": module.params["nis_servers"][0:30],
@@ -318,13 +327,9 @@ def update_ds(module, blade):
         if module.params["join_ou"] != ds_now.smb.join_ou:
             attr["smb"] = {"join_ou": module.params["join_ou"]}
             mod_ds = True
-        if module.params["enable"]:
-            if module.params["enable"] != ds_now.enabled:
-                attr["enabled"] = module.params["enable"]
-                mod_ds = True
     else:
         if module.params["uri"]:
-            if sorted(module.params["uri"][0:30]) != sorted(ds_now.uris):
+            if sorted(module.params["uri"][0:30]) != sorted(ds_now.uris or []):
                 attr["uris"] = module.params["uri"][0:30]
                 mod_ds = True
                 password_required = True
@@ -337,12 +342,12 @@ def update_ds(module, blade):
                 password_required = True
                 attr["bind_user"] = module.params["bind_user"]
                 mod_ds = True
-            elif module.params["force_bind_password"]:
+            elif (
+                module.params["force_bind_password"] and module.params["bind_password"]
+            ):
+                # A password that was not supplied cannot be forced, so
+                # "present with the current values" is a no-op without one.
                 password_required = True
-                mod_ds = True
-        if module.params["enable"]:
-            if module.params["enable"] != ds_now.enabled:
-                attr["enabled"] = module.params["enable"]
                 mod_ds = True
         if password_required:
             if module.params["bind_password"]:
@@ -370,56 +375,55 @@ def create_ds(module, blade):
     """Create Directory Service"""
     changed = True
     ds_name = module.params["dstype"]
+    # A new service is created disabled unless `enable` says otherwise.
+    enabled = bool(module.params["enable"])
+    if module.params["dstype"] == "nfs":
+        if not module.params["uri"] and not module.params["nis_domain"]:
+            module.fail_json(
+                msg="Incorrect parameters provided for dstype {0}".format(
+                    module.params["dstype"]
+                )
+            )
+    elif not module.params["uri"]:
+        module.fail_json(
+            msg="Incorrect parameters provided for dstype {0}".format(
+                module.params["dstype"]
+            )
+        )
     if not module.check_mode:
         dir_service = DirectoryService()  # Initialize for pylint
         if module.params["dstype"] == "management":
-            if module.params["uri"]:
-                dir_service = DirectoryService(
-                    uris=module.params["uri"][0:30],
-                    base_dn=module.params["base_dn"],
-                    bind_user=module.params["bind_user"],
-                    bind_password=module.params["bind_password"],
-                    enabled=module.params["enable"],
-                )
-            else:
-                module.fail_json(
-                    msg="Incorrect parameters provided for dstype {0}".format(
-                        module.params["dstype"]
-                    )
-                )
+            dir_service = DirectoryService(
+                uris=module.params["uri"][0:30],
+                base_dn=module.params["base_dn"],
+                bind_user=module.params["bind_user"],
+                bind_password=module.params["bind_password"],
+                enabled=enabled,
+            )
         elif module.params["dstype"] == "smb":
-            if module.params["uri"]:
-                smb_attrs = {"join_ou": module.params["join_ou"]}
-                dir_service = DirectoryService(
-                    uris=module.params["uri"][0:30],
-                    base_dn=module.params["base_dn"],
-                    bind_user=module.params["bind_user"],
-                    bind_password=module.params["bind_password"],
-                    smb=smb_attrs,
-                    enabled=module.params["enable"],
-                )
-            else:
-                module.fail_json(
-                    msg="Incorrect parameters provided for dstype {0}".format(
-                        module.params["dstype"]
-                    )
-                )
+            smb_attrs = {"join_ou": module.params["join_ou"]}
+            dir_service = DirectoryService(
+                uris=module.params["uri"][0:30],
+                base_dn=module.params["base_dn"],
+                bind_user=module.params["bind_user"],
+                bind_password=module.params["bind_password"],
+                smb=smb_attrs,
+                enabled=enabled,
+            )
         elif module.params["dstype"] == "nfs":
             if module.params["nis_domain"]:
                 nfs_attrs = {
                     "nis_domains": [module.params["nis_domain"]],
                     "nis_servers": module.params["nis_servers"][0:30],
                 }
-                dir_service = DirectoryService(
-                    nfs=nfs_attrs, enabled=module.params["enable"]
-                )
+                dir_service = DirectoryService(nfs=nfs_attrs, enabled=enabled)
             else:
                 dir_service = DirectoryService(
                     uris=module.params["uri"][0:30],
                     base_dn=module.params["base_dn"],
                     bind_user=module.params["bind_user"],
                     bind_password=module.params["bind_password"],
-                    enabled=module.params["enable"],
+                    enabled=enabled,
                 )
         if module.params["nfs_server"] and module.params["dstype"] == "nfs":
             if module.params["nfs_server"] != "_array_server":
@@ -440,7 +444,7 @@ def test_ds(module, blade):
     """Test directory services configuration"""
     test_server = module.params["dstype"]
     if module.params["dstype"] == "nfs" and module.params["nfs_server"]:
-        if module.params["test_nfs_server"] != "_array_server":
+        if module.params["nfs_server"] != "_array_server":
             test_server = module.params["nfs_server"] + "_nfs"
     test_response = []
     response = list(blade.get_directory_services_test(names=[test_server]).items)
@@ -480,7 +484,7 @@ def main():
             state=dict(
                 type="str", default="present", choices=["absent", "present", "test"]
             ),
-            enable=dict(type="bool", default=False),
+            enable=dict(type="bool"),
             bind_password=dict(type="str", no_log=True),
             force_bind_password=dict(type="bool", default=True, no_log=False),
             bind_user=dict(type="str"),
@@ -492,8 +496,10 @@ def main():
         )
     )
 
+    # bind_password is deliberately not tied to uri: an existing service can
+    # be declared with its current values without re-sending the secret.
     required_together = [
-        ["uri", "bind_password", "bind_user", "base_dn"],
+        ["uri", "bind_user", "base_dn"],
         ["nis_servers", "nis_domain"],
     ]
     mutually_exclusive = [["uri", "nis_domain"]]
@@ -524,15 +530,16 @@ def main():
     ds_configured = False
     if res.status_code == 200:
         dirserv = list(res.items)[0]
+        # The built-in service objects always exist, so every state=present
+        # request is a comparison against the current values in update_ds;
+        # an LDAP-based nfs service must not be mistaken for an empty one
+        # just because it has no NIS servers.
         ds_configured = True
-        if module.params["dstype"] == "nfs" and not dirserv.nfs.nis_servers:
-            ds_configured = False
     else:
         module.exit_json(msg="Directory Service {0} does not exist".format(ds_name))
-    ds_enabled = dirserv.enabled
     ldap_uri = False
     set_ldap = False
-    for uri in dirserv.uris:
+    for uri in dirserv.uris or []:
         if "ldap" in uri.lower():
             ldap_uri = True
     if module.params["uri"]:

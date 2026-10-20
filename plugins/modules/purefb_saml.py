@@ -167,7 +167,7 @@ def test_saml(module, blade):
                 "resource_name": component.resource.name,
             }
         )
-    module.exit_json(changed=True, test_response=test_response)
+    module.exit_json(changed=False, test_response=test_response)
 
 
 def delete_saml(module, blade):
@@ -260,7 +260,7 @@ def update_saml(module, blade):
             if new_idp["sp_decrypt_cred"]:
                 decrypt = ReferenceWritable(name=new_idp["sp_decrypt_cred"])
             if new_idp["sp_sign_cred"]:
-                decrypt = ReferenceWritable(name=new_idp["sp_sign_cred"])
+                signing = ReferenceWritable(name=new_idp["sp_sign_cred"])
             sp = Saml2SsoSp(
                 decryption_credential=decrypt,
                 signing_credential=signing,

@@ -38,6 +38,7 @@ options:
   role:
     description:
     - The maximum role allowed for ID Tokens issued by this API client
+    - Required when creating an API client.
     type: str
     choices: [readonly, ops_admin, storage_admin, array_admin]
   issuer:
@@ -151,6 +152,8 @@ def create_client(module, blade):
     changed = True
     if not module.params["public_key"]:
         module.fail_json(msg="public_key is required to create an API Client")
+    if not module.params["role"]:
+        module.fail_json(msg="role is required to create an API Client")
     if not 1 <= module.params["token_ttl"] <= 86400:
         module.fail_json(msg="token_ttl parameter is out of range (1 to 86400)")
     else:
@@ -205,7 +208,7 @@ def main():
     )
 
     module = AnsibleModule(argument_spec, supports_check_mode=True)
-    pattern = re.compile("^[a-zA-Z0-9]([a-zA-Z0-9_]{0,54}[a-zA-Z0-9])?$")
+    pattern = re.compile("^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,54}[a-zA-Z0-9])?$")
     if module.params["issuer"]:
         if not pattern.match(module.params["issuer"]):
             module.fail_json(
@@ -215,7 +218,7 @@ def main():
             )
     if not pattern.match(module.params["name"]):
         module.fail_json(
-            msg="Object Store Virtual Host name {0} does not conform to required naming convention".format(
+            msg="API Client name {0} does not conform to required naming convention".format(
                 module.params["name"]
             )
         )

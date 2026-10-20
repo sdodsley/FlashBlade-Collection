@@ -77,7 +77,7 @@ class TestPurefbEula:
     @patch("plugins.modules.purefb_eula.AnsibleModule")
     @patch("plugins.modules.purefb_eula.HAS_PYPURECLIENT", True)
     def test_set_eula_check_mode(self, mock_ansible_module, mock_get_system):
-        """Test EULA signing in check mode"""
+        """Test EULA signing in check mode reports the change without patching"""
         # Setup mocks
         mock_module = Mock()
         mock_module.check_mode = True
@@ -89,13 +89,53 @@ class TestPurefbEula:
         mock_ansible_module.return_value = mock_module
 
         mock_blade = Mock()
+        mock_current_signature = Mock()
+        mock_current_signature.accepted = False
+        mock_current_signature.company = "Different Company"
+        mock_current_signature.name = "Different Name"
+        mock_current_signature.title = "Different Title"
+        mock_eula_response = Mock()
+        mock_eula_response.signature = mock_current_signature
+        mock_blade.get_arrays_eula.return_value.items = [mock_eula_response]
         mock_get_system.return_value = mock_blade
 
         # Call function
         set_eula(mock_module, mock_blade)
 
-        # Verify - should not call get_arrays_eula or patch in check mode
-        mock_blade.get_arrays_eula.assert_not_called()
+        # Verify - check mode reads the current state but never patches
+        mock_blade.get_arrays_eula.assert_called_once()
+        mock_blade.patch_arrays_eula.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefb_eula.get_system")
+    @patch("plugins.modules.purefb_eula.AnsibleModule")
+    @patch("plugins.modules.purefb_eula.HAS_PYPURECLIENT", True)
+    def test_set_eula_check_mode_already_accepted(
+        self, mock_ansible_module, mock_get_system
+    ):
+        """Test check mode on a signed EULA reports no change"""
+        # Setup mocks
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = {
+            "company": "ACME Storage, Inc.",
+            "name": "Fred Bloggs",
+            "title": "Storage Manager",
+        }
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_current_signature = Mock()
+        mock_current_signature.accepted = True
+        mock_eula_response = Mock()
+        mock_eula_response.signature = mock_current_signature
+        mock_blade.get_arrays_eula.return_value.items = [mock_eula_response]
+        mock_get_system.return_value = mock_blade
+
+        # Call function
+        set_eula(mock_module, mock_blade)
+
+        # Verify
         mock_blade.patch_arrays_eula.assert_not_called()
         mock_module.exit_json.assert_called_once_with(changed=False)
 

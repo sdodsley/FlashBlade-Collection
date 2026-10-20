@@ -823,6 +823,103 @@ class TestPurefbS3accExport:
             in mock_module.fail_json.call_args[1]["msg"]
         )
 
+    # ---------------- main() context defaulting ----------------
+
+    @patch("plugins.modules.purefb_s3acc_export.LooseVersion")
+    @patch("plugins.modules.purefb_s3acc_export.get_system")
+    @patch("plugins.modules.purefb_s3acc_export.AnsibleModule")
+    @patch("plugins.modules.purefb_s3acc_export.HAS_PYPURECLIENT", True)
+    def test_main_standalone_array_sends_no_context(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """An array that is not in a fleet must not get a default context; the
+        array rejects context_names with 'Cannot find array in fleet'."""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "account": "acme",
+            "server": "fb-01",
+            "policy": None,
+            "enabled": None,
+            "state": "absent",
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_blade.get_fleets.return_value.status_code = 200
+        mock_blade.get_fleets.return_value.items = []
+        local_array = Mock()
+        local_array.name = "local-array"
+        mock_blade.get_arrays.return_value.items = [local_array]
+        mock_get_system.return_value = mock_blade
+
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_object_store_account_exports.return_value = get_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_module.params["context"] == ""
+        mock_blade.get_object_store_account_exports.assert_called_once_with(
+            filter="member.name='acme' and server.name='fb-01'"
+        )
+
+    @patch("plugins.modules.purefb_s3acc_export.LooseVersion")
+    @patch("plugins.modules.purefb_s3acc_export.get_system")
+    @patch("plugins.modules.purefb_s3acc_export.AnsibleModule")
+    @patch("plugins.modules.purefb_s3acc_export.HAS_PYPURECLIENT", True)
+    def test_main_fleet_member_defaults_context_to_local_array(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "account": "acme",
+            "server": "fb-01",
+            "policy": None,
+            "enabled": None,
+            "state": "absent",
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_blade.get_fleets.return_value.status_code = 200
+        mock_blade.get_fleets.return_value.items = [Mock()]
+        local_array = Mock()
+        local_array.name = "local-array"
+        mock_blade.get_arrays.return_value.items = [local_array]
+        mock_get_system.return_value = mock_blade
+
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_object_store_account_exports.return_value = get_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_module.params["context"] == "local-array"
+        mock_blade.get_object_store_account_exports.assert_called_once_with(
+            filter="member.name='acme' and server.name='fb-01'",
+            context_names=["local-array"],
+        )
+
     # ---------------- main() version gating ----------------
 
     @patch("plugins.modules.purefb_s3acc_export.LooseVersion")

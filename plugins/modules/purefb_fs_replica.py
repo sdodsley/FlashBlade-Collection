@@ -32,7 +32,10 @@ options:
     type: str
   state:
     description:
-      - Creates or modifies a filesystem replica link
+      - Creates or modifies a filesystem replica link.
+      - With I(state=absent) and I(policy) set, the policy is removed from
+        the replica link. Without I(policy) the replica link itself is
+        deleted (requires REST 2.10 or higher).
     required: false
     default: present
     type: str
@@ -88,6 +91,13 @@ EXAMPLES = """
     state: absent
     fb_url: 10.10.10.2
     api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
+
+- name: Delete the filesystem replica link for foo
+  everpure.flashblade.purefb_fs_replica:
+    name: foo
+    state: absent
+    fb_url: 10.10.10.2
+    api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
 """
 
 RETURN = """
@@ -119,18 +129,34 @@ def get_local_fs(module, blade):
     """Return Filesystem or None"""
     res = blade.get_file_systems(names=[module.params["name"]])
     if res.status_code == 200:
-        return res.items[0]
+        items = list(res.items)
+        if items:
+            return items[0]
     return None
 
 
 def get_local_rl(module, blade):
     """Return Filesystem Replica Link or None"""
-    res = blade.file_system_replica_links.list_file_system_replica_links(
+    res = blade.get_file_system_replica_links(
         local_file_system_names=[module.params["name"]]
     )
     if res.status_code == 200:
-        return res.items[0]
+        items = list(res.items)
+        if items:
+            return items[0]
     return None
+
+
+def _rl_has_policy(module, blade, link):
+    """Return True if the policy is attached to the replica link."""
+    res = blade.get_file_system_replica_links_policies(
+        local_file_system_names=[module.params["name"]],
+        policy_names=[module.params["policy"]],
+        remote_names=[link.remote.name],
+    )
+    if res.status_code != 200:
+        return False
+    return bool(list(res.items))
 
 
 def _check_connected(module, blade):
@@ -152,6 +178,8 @@ def _check_connected(module, blade):
 def create_rl(module, blade):
     """Create Filesystem Replica Link"""
     changed = True
+    if not module.params["target_array"]:
+        module.fail_json(msg="target_array is required to create a replica link.")
     if not module.check_mode:
         remote_array = _check_connected(module, blade)
         if remote_array:
@@ -188,33 +216,17 @@ def create_rl(module, blade):
     module.exit_json(changed=changed)
 
 
-def add_rl_policy(module, blade):
+def add_rl_policy(module, blade, link):
     """Add Policy to Filesystem Replica Link"""
     changed = False
-    if not module.params["target_array"]:
-        res = blade.get_file_system_replica_links(
-            local_file_system_names=[module.params["name"]]
-        )
-        if res.status_code != 200:
-            module.fail_json(
-                msg="Failed to get replica link for {0}. Error: {1}".format(
-                    module.params["name"], get_error_message(res)
-                )
-            )
-        module.params["target_array"] = list(res.items)[0].remote.name
-    remote_array = _check_connected(module, blade)
-    res = blade.get_file_system_replica_links_policies(
-        local_file_system_names=[module.params["name"]],
-        policy_names=[module.params["policy"]],
-        remote_names=[remote_array.remote.name],
-    )
-    if res.status_code != 200:
+    remote_name = link.remote.name
+    if not _rl_has_policy(module, blade, link):
         changed = True
         if not module.check_mode:
             res = blade.post_file_system_replica_links_policies(
                 policy_names=[module.params["policy"]],
                 local_file_system_names=[module.params["name"]],
-                remote_names=[remote_array.remote.name],
+                remote_names=[remote_name],
             )
             if res.status_code != 200:
                 module.fail_json(
@@ -227,20 +239,17 @@ def add_rl_policy(module, blade):
     module.exit_json(changed=changed)
 
 
-def delete_rl_policy(module, blade):
+def delete_rl_policy(module, blade, link):
     """Delete Policy from Filesystem Replica Link"""
-    changed = True
-    if not module.check_mode:
-        res = blade.get_file_system_replica_links_policies(
-            local_file_system_names=[module.params["name"]],
-            policy_names=[module.params["policy"]],
-        )
-        if res.status_code != 200:
-            current_policy = list(res.items)[0]
+    changed = False
+    remote_name = link.remote.name
+    if _rl_has_policy(module, blade, link):
+        changed = True
+        if not module.check_mode:
             res = blade.delete_file_system_replica_links_policies(
                 policy_names=[module.params["policy"]],
                 local_file_system_names=[module.params["name"]],
-                remote_names=[current_policy.link.remote.name],
+                remote_names=[remote_name],
             )
             if res.status_code != 200:
                 module.fail_json(
@@ -250,31 +259,31 @@ def delete_rl_policy(module, blade):
                         get_error_message(res),
                     )
                 )
-        else:
-            changed = False
     module.exit_json(changed=changed)
 
 
-def delete_rl(module, blade):
+def delete_rl(module, blade, link):
     """Delete filesystem replica link"""
     changed = True
+    remote_name = link.remote.name
+    remote_fs = link.remote_file_system.name
     if not module.check_mode:
         res = blade.delete_file_system_replica_links(
             local_file_system_names=[module.params["name"]],
-            remote_file_system_names=[module.params["target_fs"]],
-            remote_names=[module.params["target_array"]],
+            remote_file_system_names=[remote_fs],
+            remote_names=[remote_name],
             cancel_in_progress_transfers=module.params["in_progress"],
         )
         if res.status_code != 200:
             module.fail_json(
                 msg="Failed to delete replica link from {0} to {1}:{2}. Error: {3}".format(
                     module.params["name"],
-                    module.params["target_array"],
-                    module.params["target_fs"],
+                    remote_name,
+                    remote_fs,
                     get_error_message(res),
                 )
             )
-    module.exit_jsob(changed=changed)
+    module.exit_json(changed=changed)
 
 
 def main():
@@ -290,11 +299,7 @@ def main():
         )
     )
 
-    required_if = [["state", "absent", ["policy"]]]
-
-    module = AnsibleModule(
-        argument_spec, required_if=required_if, supports_check_mode=True
-    )
+    module = AnsibleModule(argument_spec, supports_check_mode=True)
 
     if not HAS_PYPURECLIENT:
         module.fail_json(msg="py-pure-client sdk is required for this module")
@@ -313,30 +318,23 @@ def main():
             )
         )
 
-    policy = True
-    if module.params["policy"]:
-        res = blade.get_file_system_replica_links_policies(
-            policy_names=[module.params["policy"]]
-        )
+    policy = module.params["policy"]
+    if policy:
+        # Replica link policies are snapshot policies; validate against the
+        # policies collection, not against links the policy is attached to.
+        res = blade.get_policies(names=[policy])
         if res.status_code != 200:
-            module.fail_json(
-                msg="Selected policy {0} does not exist.".format(
-                    module.params["policy"]
-                )
-            )
-    else:
-        policy = None
+            module.fail_json(msg="Selected policy {0} does not exist.".format(policy))
     if state == "present" and not local_replica_link:
         create_rl(module, blade)
+    elif state == "present" and local_replica_link and policy:
+        add_rl_policy(module, blade, local_replica_link)
+    elif state == "absent" and local_replica_link and policy:
+        delete_rl_policy(module, blade, local_replica_link)
     elif state == "absent" and local_replica_link:
         if LooseVersion(DELETE_RL_API_VERSION) > LooseVersion(versions):
-            module.fail_json("Deleting a replica link requires REST 2.10 or higher")
-        else:
-            delete_rl(module, blade)
-    elif state == "present" and local_replica_link and policy:
-        add_rl_policy(module, blade)
-    elif state == "absent" and policy:
-        delete_rl_policy(module, blade)
+            module.fail_json(msg="Deleting a replica link requires REST 2.10 or higher")
+        delete_rl(module, blade, local_replica_link)
 
     module.exit_json(changed=False)
 

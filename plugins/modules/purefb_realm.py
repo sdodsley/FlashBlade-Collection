@@ -34,8 +34,12 @@ options:
     description:
       - When creating a new realm, ensure it is created without any default resource accesses.
       - Only used when creating a new realm.
+      - Purity//FB currently requires every realm to be created without the
+        default access list, so the array rejects C(false). The default is
+        therefore C(true); C(false) is passed through for Purity//FB versions
+        that accept it.
     type: bool
-    default: false
+    default: true
     version_added: '1.27.0'
   state:
     description:
@@ -65,9 +69,7 @@ EXAMPLES = r"""
 - name: Create new realm
   everpure.flashblade.purefb_realm:
     name: foo
-    without_default_access_list: true
     qos_policy: realm1_qos
-    iops_qos: 100
     fb_url: 10.10.10.2
     api_token: T-9f276a18-50ab-446e-8a0c-666a3529a1b6
 
@@ -143,7 +145,12 @@ def get_policy(module, blade):
 
 def get_realm(module, blade):
     """Get Realm"""
-    res = blade.get_realms(destroyed=False, names=[module.params["name"]])
+    return _realm_exists(blade, module.params["name"])
+
+
+def _realm_exists(blade, name):
+    """Return True if a live (not destroyed) realm called name exists."""
+    res = blade.get_realms(destroyed=False, names=[name])
     if res.status_code == 200:
         return True
     return None
@@ -152,7 +159,7 @@ def get_realm(module, blade):
 def rename_realm(module, blade):
     changed = True
     if not module.check_mode:
-        res = blade.patch_realm(
+        res = blade.patch_realms(
             names=[module.params["name"]],
             realm=RealmPatch(name=module.params["rename"]),
         )
@@ -168,22 +175,33 @@ def rename_realm(module, blade):
 def make_realm(module, blade):
     """Create Realm"""
     changed = True
+    if module.params["qos_policy"] and not get_policy(module, blade):
+        module.fail_json(
+            msg="QoS policy {0} does not exist.".format(module.params["qos_policy"])
+        )
     if not module.check_mode:
         res = blade.post_realms(
             names=[module.params["name"]],
             without_default_access_list=module.params["without_default_access_list"],
         )
         if res.status_code != 200:
+            hint = ""
+            if not module.params["without_default_access_list"]:
+                hint = (
+                    " This Purity//FB version requires realms to be created "
+                    "without the default access list; set "
+                    "without_default_access_list to true."
+                )
             module.fail_json(
-                msg="Creation of realm {0} failed. Error: {1}".format(
-                    module.params["name"], get_error_message(res)
+                msg="Creation of realm {0} failed. Error: {1}{2}".format(
+                    module.params["name"], get_error_message(res), hint
                 )
             )
-    if module.params["qos_policy"]:
-        if get_policy(module, blade):
+        if module.params["qos_policy"]:
             res = blade.post_qos_policies_members(
                 policy_names=[module.params["qos_policy"]],
                 member_names=[module.params["name"]],
+                member_types=["realms"],
             )
             if res.status_code != 200:
                 module.fail_json(
@@ -197,26 +215,34 @@ def make_realm(module, blade):
 def update_realm(module, blade):
     """Update Realm QoS Policy"""
     changed = False
-    # Get current QoS policy for the realm
-    policy_members = blade.get_qos_policies_members(
+    # Get current QoS policy for the realm. A realm without a policy may
+    # come back as an error response, which has no items.
+    current_policy = None
+    res = blade.get_qos_policies_members(
         member_types=["realms"], member_names=[module.params["name"]]
-    ).items
-    first_member = next(iter(policy_members), None)
-    current_policy = getattr(getattr(first_member, "policy", None), "name", None)
+    )
+    if res.status_code == 200:
+        first_member = next(iter(res.items), None)
+        current_policy = getattr(getattr(first_member, "policy", None), "name", None)
     if module.params["qos_policy"] and current_policy != module.params["qos_policy"]:
+        if not get_policy(module, blade):
+            module.fail_json(
+                msg="QoS policy {0} does not exist.".format(module.params["qos_policy"])
+            )
         changed = True
         if not module.check_mode:
-            res = blade.delete_qos_policies_members(
-                policy_names=[current_policy],
-                member_names=[module.params["name"]],
-                member_types=["realms"],
-            )
-            if res.status_code != 200:
-                module.fail_json(
-                    msg="Exisitng QoS policy removal failed for realm {0}. Error: {1}".format(
-                        module.params["name"], get_error_message(res)
-                    )
+            if current_policy:
+                res = blade.delete_qos_policies_members(
+                    policy_names=[current_policy],
+                    member_names=[module.params["name"]],
+                    member_types=["realms"],
                 )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Existing QoS policy removal failed for realm {0}. Error: {1}".format(
+                            module.params["name"], get_error_message(res)
+                        )
+                    )
             res = blade.post_qos_policies_members(
                 policy_names=[module.params["qos_policy"]],
                 member_names=[module.params["name"]],
@@ -289,7 +315,7 @@ def main():
     argument_spec.update(
         dict(
             name=dict(type="str", required=True),
-            without_default_access_list=dict(type="bool", default=False),
+            without_default_access_list=dict(type="bool", default=True),
             state=dict(type="str", default="present", choices=["absent", "present"]),
             qos_policy=dict(type="str"),
             eradicate=dict(type="bool", default=False),
@@ -316,6 +342,9 @@ def main():
     elif xrealm and state == "absent" and module.params["eradicate"]:
         eradicate_realm(module, blade)
     elif not realm and not xrealm and state == "present":
+        if module.params["rename"] and _realm_exists(blade, module.params["rename"]):
+            # The rename already happened on an earlier run.
+            module.exit_json(changed=False)
         make_realm(module, blade)
     elif state == "present" and realm and module.params["rename"] and not xrealm:
         rename_realm(module, blade)

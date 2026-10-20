@@ -103,11 +103,13 @@ options:
     - Number of character groups (lowercase letters, uppercase letters,
       numbers, special characters) required to be present in a password.
     - Range between 1 and 4.
+    - Set to 0 to disable the character group rule.
     type: int
   min_characters_per_group:
     description:
     - Minimum number of characters per group to count the group as present.
     - Must be 1 or greater.
+    - Set to 0 to disable the characters per group rule.
     type: int
   enforce_username_check:
     description:
@@ -212,8 +214,8 @@ PARAM_RANGES = {
     "max_login": (0, 100),
     "min_password": (1, 100),
     "password_history": (0, 64),
-    "min_character_groups": (1, 4),
-    "min_characters_per_group": (1, None),
+    "min_character_groups": (0, 4),
+    "min_characters_per_group": (0, None),
     "lockout": (0, 7776000),
     "min_password_age": (0, 604800),
     "max_password_age": (0, 8639913600),
@@ -227,6 +229,8 @@ NULL_WHEN_DISABLED_FIELDS = (
     "lockout_duration",
     "max_login_attempts",
     "max_password_age",
+    "min_character_groups",
+    "min_characters_per_group",
     "min_password_age",
     "password_history",
 )

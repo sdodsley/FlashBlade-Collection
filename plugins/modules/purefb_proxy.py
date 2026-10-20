@@ -82,9 +82,6 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import 
 from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
     get_error_message,
 )
-from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
-    get_error_message,
-)
 
 
 def delete_proxy(module, blade):
@@ -129,10 +126,10 @@ def update_proxy(module, blade):
         protocol = "https://"
     else:
         protocol = "http://"
-    if not module.check_mode:
-        new_proxy = protocol + module.params["host"] + ":" + str(module.params["port"])
-        if new_proxy != current_proxy:
-            changed = True
+    new_proxy = protocol + module.params["host"] + ":" + str(module.params["port"])
+    if new_proxy != current_proxy:
+        changed = True
+        if not module.check_mode:
             res = blade.patch_support(support=Support(proxy=new_proxy))
             if res.status_code != 200:
                 module.fail_json(

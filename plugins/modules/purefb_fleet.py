@@ -171,7 +171,7 @@ def add_fleet_members(module, blade):
     """Add new member to the fleet"""
     changed = False
     existing = False
-    if not module.params["member_url"] and not module.params["member_api"]:
+    if not module.params["member_url"] or not module.params["member_api"]:
         module.fail_json(msg="missing required arguments: member_api, member_url")
     res = blade.post_fleets_fleet_key()
     if res.status_code != 200:

@@ -698,6 +698,222 @@ class TestPurefbS3ExportPolicy:
     @patch("plugins.modules.purefb_s3_export_policy.get_system")
     @patch("plugins.modules.purefb_s3_export_policy.AnsibleModule")
     @patch("plugins.modules.purefb_s3_export_policy.HAS_PYPURECLIENT", True)
+    def test_main_rename_is_idempotent_when_already_renamed(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """A repeated rename finds no policy under the old name but one under
+        the new name: that is the desired state, not an error, and no change."""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-policy",
+            "state": "present",
+            "enabled": None,
+            "rename": "renamed-policy",
+            "rules": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_get_system.return_value = mock_blade
+
+        renamed_policy = Mock()
+        renamed_policy.name = "renamed-policy"
+        renamed_policy.enabled = True
+
+        def get_policies(names=None, **kwargs):
+            response = Mock()
+            if names == ["renamed-policy"]:
+                response.status_code = 200
+                response.items = [renamed_policy]
+            else:
+                response.status_code = 400
+                response.items = []
+            return response
+
+        mock_blade.get_s3_export_policies.side_effect = get_policies
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_not_called()
+        mock_blade.patch_s3_export_policies.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefb_s3_export_policy.LooseVersion")
+    @patch("plugins.modules.purefb_s3_export_policy.S3ExportPolicyRulePost")
+    @patch("plugins.modules.purefb_s3_export_policy.S3ExportPolicyPatch")
+    @patch("plugins.modules.purefb_s3_export_policy.get_system")
+    @patch("plugins.modules.purefb_s3_export_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_s3_export_policy.HAS_PYPURECLIENT", True)
+    def test_main_reconciles_rules_before_rename(
+        self,
+        mock_ansible_module,
+        mock_get_system,
+        mock_patch_cls,
+        mock_rule_post,
+        mock_loose_version,
+    ):
+        """Rules are reconciled under the current name before the rename PATCH,
+        otherwise the rule calls would address a name that no longer exists."""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-policy",
+            "state": "present",
+            "enabled": None,
+            "rename": "renamed-policy",
+            "rules": [
+                {
+                    "name": "r1",
+                    "actions": ["pure:S3Access"],
+                    "effect": "allow",
+                    "resources": ["*"],
+                }
+            ],
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_get_system.return_value = mock_blade
+
+        existing_policy = Mock()
+        existing_policy.name = "test-policy"
+        existing_policy.enabled = True
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = [existing_policy]
+        mock_blade.get_s3_export_policies.return_value = get_response
+
+        # No rules yet, so r1 has to be added
+        get_rules_response = Mock()
+        get_rules_response.status_code = 200
+        get_rules_response.items = []
+        mock_blade.get_s3_export_policies_rules.return_value = get_rules_response
+        mock_blade.post_s3_export_policies_rules.return_value.status_code = 200
+        mock_blade.patch_s3_export_policies.return_value.status_code = 200
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        rule_kwargs = mock_blade.post_s3_export_policies_rules.call_args[1]
+        assert rule_kwargs["policy_names"] == ["test-policy"]
+        call_names = [c[0] for c in mock_blade.mock_calls]
+        assert call_names.index("post_s3_export_policies_rules") < call_names.index(
+            "patch_s3_export_policies"
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefb_s3_export_policy.LooseVersion")
+    @patch("plugins.modules.purefb_s3_export_policy.get_system")
+    @patch("plugins.modules.purefb_s3_export_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_s3_export_policy.HAS_PYPURECLIENT", True)
+    def test_main_standalone_array_sends_no_context(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """An array that is not in a fleet must not get a default context; the
+        array rejects context_names with 'Cannot find array in fleet'."""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-policy",
+            "state": "absent",
+            "enabled": None,
+            "rename": None,
+            "rules": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_blade.get_fleets.return_value.status_code = 200
+        mock_blade.get_fleets.return_value.items = []
+        local_array = Mock()
+        local_array.name = "local-array"
+        mock_blade.get_arrays.return_value.items = [local_array]
+        mock_get_system.return_value = mock_blade
+
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_s3_export_policies.return_value = get_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_module.params["context"] == ""
+        mock_blade.get_s3_export_policies.assert_called_once_with(names=["test-policy"])
+
+    @patch("plugins.modules.purefb_s3_export_policy.LooseVersion")
+    @patch("plugins.modules.purefb_s3_export_policy.get_system")
+    @patch("plugins.modules.purefb_s3_export_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_s3_export_policy.HAS_PYPURECLIENT", True)
+    def test_main_fleet_member_defaults_context_to_local_array(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "test-policy",
+            "state": "absent",
+            "enabled": None,
+            "rename": None,
+            "rules": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.20"]
+        mock_blade.get_fleets.return_value.status_code = 200
+        mock_blade.get_fleets.return_value.items = [Mock()]
+        local_array = Mock()
+        local_array.name = "local-array"
+        mock_blade.get_arrays.return_value.items = [local_array]
+        mock_get_system.return_value = mock_blade
+
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_s3_export_policies.return_value = get_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_module.params["context"] == "local-array"
+        mock_blade.get_s3_export_policies.assert_called_once_with(
+            names=["test-policy"], context_names=["local-array"]
+        )
+
+    @patch("plugins.modules.purefb_s3_export_policy.LooseVersion")
+    @patch("plugins.modules.purefb_s3_export_policy.get_system")
+    @patch("plugins.modules.purefb_s3_export_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_s3_export_policy.HAS_PYPURECLIENT", True)
     def test_main_deletes_policy(
         self, mock_ansible_module, mock_get_system, mock_loose_version
     ):

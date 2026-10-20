@@ -210,3 +210,24 @@ class TestPurefbExport:
         assert post_kwargs["export_name"] == "exp1"
         # server was wrapped in a Reference(name=…) call
         mock_ref.assert_any_call(name="_array_server")
+
+    def test_create_export_check_mode_makes_no_request(self):
+        """In check mode no POST is made and the (undefined) response must
+        not be inspected. The old shape raised NameError on ``res``.
+        """
+        module = self._mk_module(export_policy="nfs_pol1")
+        module.check_mode = True
+        blade = Mock()
+        fs_res = Mock()
+        fs_res.status_code = 200
+        fs_res.items = iter([self._mk_fs()])
+        blade.get_file_systems.return_value = fs_res
+        module.exit_json.side_effect = SystemExit
+        try:
+            create_export(module, blade)
+        except SystemExit:
+            pass
+
+        blade.post_file_system_exports.assert_not_called()
+        module.fail_json.assert_not_called()
+        module.exit_json.assert_called_once_with(changed=True)

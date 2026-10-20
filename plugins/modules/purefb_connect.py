@@ -202,11 +202,11 @@ def break_connection(module, blade, target_blade):
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
             and module.params["context"]
         ):
-            source_blade = (
-                blade.get_arrays(context_names=[module.params["context"]]).items[0].name
-            )
+            source_blade = list(
+                blade.get_arrays(context_names=[module.params["context"]]).items
+            )[0].name
         else:
-            source_blade = blade.get_arrays().items[0].name
+            source_blade = list(blade.get_arrays().items)[0].name
         if target_blade.management_address is None:
             module.fail_json(
                 msg="Disconnect can only happen from the array that formed the connection"
@@ -372,9 +372,11 @@ def update_connection(module, blade):
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
             and module.params["context"]
         ):
-            blade.get_bucket_replica_links(context_names=[module.params["context"]])
+            res = blade.get_bucket_replica_links(
+                context_names=[module.params["context"]]
+            )
         else:
-            blade.get_bucket_replica_links()
+            res = blade.get_bucket_replica_links()
         if (
             module.params["default_limit"] or module.params["window_limit"]
         ) and res.total_item_count != 0:
@@ -503,16 +505,12 @@ def main():
             module.params["context"] = list(blade.get_arrays().items)[0].name
 
     if module.params["default_limit"]:
-        if (
-            human_to_bytes(module.params["default_limit"]) != 0
-            and 5242880 >= human_to_bytes(module.params["default_limit"]) >= 30064771072
-        ):
+        default_limit = human_to_bytes(module.params["default_limit"])
+        if default_limit != 0 and not (5242880 <= default_limit <= 30064771072):
             module.fail_json(msg="Default Bandwidth must be between 5MB and 28GB")
     if module.params["window_limit"]:
-        if (
-            human_to_bytes(module.params["window_limit"]) != 0
-            and 5242880 >= human_to_bytes(module.params["window_limit"]) >= 30064771072
-        ):
+        window_limit = human_to_bytes(module.params["window_limit"])
+        if window_limit != 0 and not (5242880 <= window_limit <= 30064771072):
             module.fail_json(msg="Window Bandwidth must be between 5MB and 28GB")
 
     target_blade = _check_connected(module, blade)

@@ -610,7 +610,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -678,7 +678,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -1306,7 +1306,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -1405,7 +1405,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -1459,7 +1459,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -1572,7 +1572,7 @@ class TestPurefbTlsPolicy:
             "name": "tls1",
             "state": "present",
             "enabled": None,
-            "appliance_certificate": None,
+            "appliance_certificate": "my_cert",
             "client_certificates_required": None,
             "trusted_client_certificate_authority": None,
             "verify_client_certificate_trust": None,
@@ -1698,3 +1698,50 @@ class TestPurefbTlsPolicy:
         assert "Failed to delete TLS policy" in msg
         assert "already been detached" in msg
         assert "data1.eth0" in msg
+
+    @patch("plugins.modules.purefb_tls_policy.LooseVersion")
+    @patch("plugins.modules.purefb_tls_policy.get_system")
+    @patch("plugins.modules.purefb_tls_policy.AnsibleModule")
+    @patch("plugins.modules.purefb_tls_policy.HAS_PYPURECLIENT", True)
+    def test_main_create_without_appliance_certificate_fails(
+        self, mock_ansible_module, mock_get_system, mock_loose_version
+    ):
+        """Test create fails early when appliance_certificate is not given"""
+        mock_loose_version.return_value.__gt__ = Mock(return_value=False)
+        mock_module = Mock()
+        mock_module.exit_json = Mock(side_effect=SystemExit)
+        mock_module.fail_json = Mock(side_effect=SystemExit)
+        mock_module.params = {
+            "name": "tls1",
+            "state": "present",
+            "enabled": None,
+            "appliance_certificate": None,
+            "client_certificates_required": None,
+            "trusted_client_certificate_authority": None,
+            "verify_client_certificate_trust": None,
+            "min_tls_version": "1.2",
+            "enabled_tls_ciphers": None,
+            "disabled_tls_ciphers": None,
+            "network_interfaces": None,
+        }
+        mock_module.check_mode = False
+        mock_ansible_module.return_value = mock_module
+
+        mock_blade = Mock()
+        mock_blade.get_versions.return_value.items = ["2.17"]
+        mock_get_system.return_value = mock_blade
+
+        get_response = Mock()
+        get_response.status_code = 200
+        get_response.items = []
+        mock_blade.get_tls_policies.return_value = get_response
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_blade.post_tls_policies.assert_not_called()
+        mock_module.fail_json.assert_called_once()
+        msg = mock_module.fail_json.call_args[1]["msg"]
+        assert "appliance_certificate is required" in msg

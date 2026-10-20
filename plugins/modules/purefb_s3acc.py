@@ -407,19 +407,23 @@ def delete_s3acc(module, blade):
     changed = True
     api_version = get_rest_api_version(blade)
     if not module.check_mode:
+        # Users are named "<account>/<user>"; look for any user of this account.
+        user_filter = "name='" + module.params["name"] + "/*'"
         if (
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
             and module.params["context"]
         ):
             res = blade.get_object_store_users(
-                names=[module.params["name"] + "/*'"],
+                filter=user_filter,
                 context_names=[module.params["context"]],
             )
         else:
-            res = blade.get_object_store_users(names=[module.params["name"] + "/*'"])
-        if res.status_code == 200:
-            module.fail_json(msg="Remove all Users from Object Store Account {0} \
-                                 before deletion".format(module.params["name"]))
+            res = blade.get_object_store_users(filter=user_filter)
+        if res.status_code == 200 and list(res.items):
+            module.fail_json(
+                msg="Remove all Users from Object Store Account {0} "
+                "before deletion".format(module.params["name"])
+            )
         else:
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)

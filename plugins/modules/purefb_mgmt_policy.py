@@ -68,7 +68,12 @@ options:
     - Duplicate rules (same role and scope, any case) are rejected.
     - Omit (or set to C(null)) to leave the current rule list untouched.
     - Provide an empty list to remove every rule from the policy.
-    - Requires FlashBlade REST API 2.26 or newer.
+    - On REST API 2.26 and newer rules are added and removed one at a time.
+      Older arrays (REST 2.19 to 2.25) have no per-rule endpoints, so the
+      rule list is sent with the policy at creation and replaced as a whole
+      when it differs on update.
+    - Purity//FB 4.6 (REST 2.21) requires exactly one rule when a policy
+      is created.
     type: list
     elements: dict
     suboptions:
@@ -183,9 +188,13 @@ from ansible_collections.everpure.flashblade.plugins.module_utils.version import
 )
 
 MIN_POLICY_API_VERSION = "2.19"
+# REST version that added the management-access-policies/rules endpoints.
+# Older arrays carry the rule list inline on the policy object instead.
 MIN_RULE_API_VERSION = "2.26"
 CONTEXT_API_VERSION = "2.17"
-BUILTIN_POLICIES = frozenset(["array_admin", "ops_admin", "readonly", "storage_admin"])
+BUILTIN_POLICIES = frozenset(
+    ["array_admin", "management", "ops_admin", "readonly", "storage_admin"]
+)
 
 
 def _ctx(module, api_version):
@@ -378,6 +387,57 @@ def _reconcile_rules(module, blade, ctx_kwargs):
     return True
 
 
+def _inline_rule_key(rule):
+    """Identity key of a rule as the array returns it inside the policy.
+
+    Tolerates missing role/scope references (a rule whose role was deleted
+    comes back with ``role: null``) instead of raising ``AttributeError``.
+    """
+    role = getattr(getattr(rule, "role", None), "name", None) or ""
+    scope = getattr(rule, "scope", None)
+    return _rule_key(
+        role,
+        getattr(scope, "resource_type", None) or "",
+        getattr(scope, "name", None) or "",
+    )
+
+
+def _inline_rules_differ(module, existing):
+    """Compare the desired rules with the rule list carried on the policy
+    object (REST < 2.26, where there are no per-rule endpoints).
+
+    Identity is (role, scope.resource_type, scope.name), case-insensitive,
+    so declaring the same rule the policy was created with is not a change.
+    """
+    current = set()
+    for rule in getattr(existing, "rules", None) or []:
+        current.add(_inline_rule_key(rule))
+    return current != set(_desired_rules_by_key(module.params["rules"]))
+
+
+def _replace_inline_rules(module, blade, ctx_kwargs, existing):
+    """Replace the whole rule list of an existing policy (REST < 2.26).
+
+    Returns True if a change was made (or would be made in check-mode).
+    """
+    if module.params["rules"] is None or not _inline_rules_differ(module, existing):
+        return False
+    if module.check_mode:
+        return True
+    res = blade.patch_management_access_policies(
+        names=[module.params["name"]],
+        policy=ManagementAccessPolicy(rules=_build_post_rules(module.params["rules"])),
+        **ctx_kwargs,
+    )
+    if res.status_code != 200:
+        module.fail_json(
+            msg="Failed to replace rules on policy {0}. Error: {1}".format(
+                module.params["name"], get_error_message(res)
+            )
+        )
+    return True
+
+
 def _build_post_rules(rules):
     if rules is None:
         return None
@@ -423,7 +483,7 @@ def create_policy(module, blade, ctx_kwargs):
     module.exit_json(changed=True)
 
 
-def update_policy(module, blade, ctx_kwargs, existing):
+def update_policy(module, blade, ctx_kwargs, existing, api_version=None):
     changed = False
 
     patch_kwargs = {}
@@ -453,8 +513,15 @@ def update_policy(module, blade, ctx_kwargs, existing):
                     )
                 )
 
-    if _reconcile_rules(module, blade, ctx_kwargs):
-        changed = True
+    if module.params["rules"] is not None:
+        if api_version is not None and LooseVersion(
+            MIN_RULE_API_VERSION
+        ) > LooseVersion(api_version):
+            rules_changed = _replace_inline_rules(module, blade, ctx_kwargs, existing)
+        else:
+            rules_changed = _reconcile_rules(module, blade, ctx_kwargs)
+        if rules_changed:
+            changed = True
 
     module.exit_json(changed=changed)
 
@@ -524,15 +591,6 @@ def main():
                 "access policies (requires {1}+)."
             ).format(api_version, MIN_POLICY_API_VERSION)
         )
-    if module.params["rules"] is not None and LooseVersion(
-        MIN_RULE_API_VERSION
-    ) > LooseVersion(api_version):
-        module.fail_json(
-            msg=(
-                "FlashBlade REST version {0} does not support rule "
-                "management on policies (requires {1}+)."
-            ).format(api_version, MIN_RULE_API_VERSION)
-        )
     ctx_kwargs = _ctx(module, api_version)
 
     existing = _get_policy(module, blade, ctx_kwargs)
@@ -545,7 +603,7 @@ def main():
         if existing is None:
             create_policy(module, blade, ctx_kwargs)
         else:
-            update_policy(module, blade, ctx_kwargs, existing)
+            update_policy(module, blade, ctx_kwargs, existing, api_version)
 
 
 if __name__ == "__main__":

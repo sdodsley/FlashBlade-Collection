@@ -164,7 +164,7 @@ class TestPurefbPasswordPolicy:
             ("lockout", 7776001),
             ("password_history", -1),
             ("password_history", 65),
-            ("min_character_groups", 0),
+            ("min_character_groups", -1),
             ("min_character_groups", 5),
             ("min_password_age", -3600),
             ("min_password_age", 608400),
@@ -178,15 +178,21 @@ class TestPurefbPasswordPolicy:
             mock_module.fail_json.assert_called_once()
             assert param in mock_module.fail_json.call_args[1]["msg"]
 
-    def test_validate_params_rejects_min_characters_per_group_below_one(self):
-        """Test _validate_params rejects min_characters_per_group of 0"""
-        mock_module = _mock_module(min_characters_per_group=0)
+    def test_validate_params_rejects_negative_min_characters_per_group(self):
+        """Test _validate_params rejects a negative min_characters_per_group"""
+        mock_module = _mock_module(min_characters_per_group=-1)
         try:
             _validate_params(mock_module)
         except SystemExit:
             pass
         mock_module.fail_json.assert_called_once()
-        assert "must be 1 or greater" in mock_module.fail_json.call_args[1]["msg"]
+        assert "must be 0 or greater" in mock_module.fail_json.call_args[1]["msg"]
+
+    def test_validate_params_accepts_zero_character_group_rules(self):
+        """Test _validate_params allows 0 (rule disabled) for the group rules"""
+        mock_module = _mock_module(min_character_groups=0, min_characters_per_group=0)
+        _validate_params(mock_module)
+        mock_module.fail_json.assert_not_called()
 
     def test_validate_params_rejects_non_hour_ages(self):
         """Test _validate_params rejects ages that are not whole hours"""
@@ -422,6 +428,26 @@ class TestPurefbPasswordPolicy:
         )
         mock_module.exit_json.assert_called_once_with(changed=True)
 
+    @patch(MODULE_PATH + ".PasswordPolicy")
+    def test_update_policy_clears_character_group_rules_with_zero(
+        self, mock_policy_class
+    ):
+        """Test update_policy sends 0 to clear the character group rules"""
+        mock_module = _mock_module(min_character_groups=0, min_characters_per_group=0)
+        mock_blade = Mock()
+        response = Mock()
+        response.status_code = 200
+        mock_blade.patch_password_policies.return_value = response
+
+        try:
+            update_policy(mock_module, mock_blade, _mock_policy())
+        except SystemExit:
+            pass
+        mock_policy_class.assert_called_once_with(
+            min_character_groups=0, min_characters_per_group=0
+        )
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
     def test_update_policy_zero_idempotent_when_rules_disabled(self):
         """Test a requested 0 matches a disabled rule the API reports as null"""
         mock_module = _mock_module(
@@ -430,6 +456,8 @@ class TestPurefbPasswordPolicy:
             password_history=0,
             min_password_age=0,
             max_password_age=0,
+            min_character_groups=0,
+            min_characters_per_group=0,
         )
         mock_blade = Mock()
         current = _mock_policy(
@@ -438,6 +466,8 @@ class TestPurefbPasswordPolicy:
             password_history=None,
             min_password_age=None,
             max_password_age=None,
+            min_character_groups=None,
+            min_characters_per_group=None,
         )
 
         try:

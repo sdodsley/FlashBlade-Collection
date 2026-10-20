@@ -104,7 +104,7 @@ EXAMPLES = """
     name: foo
     quota: 20G
     uname: bar
-    state: absent
+    state: present
     fb_url: 10.10.10.2
     api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
 
@@ -112,8 +112,8 @@ EXAMPLES = """
   everpure.flashblade.purefb_userquota:
     name: foo
     quota: 20G
-    uid: bar
-    state: absent
+    uid: 1234
+    state: present
     fb_url: 10.10.10.2
     api_token: T-55a68eb5-c785-4720-a2ca-8b03903bf641
 """
@@ -147,7 +147,8 @@ CONTEXT_API_VERSION = "2.17"
 def get_quota(module, blade):
     """Return Filesystem User Quota or None"""
     versions = get_rest_api_version(blade)
-    if module.params["uid"]:
+    # uid 0 (root) is a valid value, so test for presence rather than truth.
+    if module.params["uid"] is not None:
         if (
             LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
             and module.params["context"]
@@ -188,7 +189,7 @@ def create_quota(module, blade):
     versions = get_rest_api_version(blade)
     quota = int(human_to_bytes(module.params["quota"]))
     if not module.check_mode:
-        if module.params["uid"]:
+        if module.params["uid"] is not None:
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                 and module.params["context"]
@@ -223,7 +224,7 @@ def create_quota(module, blade):
                     quota=UserQuotaPost(quota=quota),
                 )
         if res.status_code != 200:
-            if module.params["uid"]:
+            if module.params["uid"] is not None:
                 module.fail_json(
                     msg="Failed to create quote for UID {0} on filesystem {1}. Error: {2}".format(
                         module.params["uid"],
@@ -251,7 +252,7 @@ def update_quota(module, blade):
     if current_quota.quota != quota:
         changed = True
         if not module.check_mode:
-            if module.params["uid"]:
+            if module.params["uid"] is not None:
                 if (
                     LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                     and module.params["context"]
@@ -309,7 +310,7 @@ def delete_quota(module, blade):
     changed = True
     versions = get_rest_api_version(blade)
     if not module.check_mode:
-        if module.params["uid"]:
+        if module.params["uid"] is not None:
             if (
                 LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(versions)
                 and module.params["context"]
@@ -340,7 +341,7 @@ def delete_quota(module, blade):
                     user_names=[module.params["uname"]],
                 )
         if res.status_code != 200:
-            if module.params["uid"]:
+            if module.params["uid"] is not None:
                 module.fail_json(
                     msg="Failed to delete quota for UID {0} on filesystem {1}. Error: {2}".format(
                         module.params["uid"],
@@ -373,10 +374,12 @@ def main():
     )
 
     mutually_exclusive = [["uid", "uname"]]
+    required_one_of = [["uid", "uname"]]
     required_if = [["state", "present", ["quota"]]]
     module = AnsibleModule(
         argument_spec,
         mutually_exclusive=mutually_exclusive,
+        required_one_of=required_one_of,
         required_if=required_if,
         supports_check_mode=True,
     )

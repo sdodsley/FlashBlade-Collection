@@ -28,6 +28,7 @@ options:
   host:
     description:
     - Relay server name
+    - Use "" to clear.
     type: str
   domain:
     description:
@@ -84,10 +85,12 @@ def set_smtp(module, blade):
     """Configure SMTP settings"""
     changed = False
     current_smtp = list(blade.get_smtp_servers(names=["management"]).items)[0]
-    relay_host = current_smtp.relay_host
+    # The array reports an unset relay host or encryption mode as null; the
+    # module takes "" for "unset", so compare both sides normalised to "".
+    relay_host = getattr(current_smtp, "relay_host", None) or ""
     domain = current_smtp.sender_domain
-    encrypt = getattr(current_smtp, "encryption_mode", "")
-    if module.params["host"] and module.params["host"] != relay_host:
+    encrypt = getattr(current_smtp, "encryption_mode", None) or ""
+    if module.params["host"] is not None and module.params["host"] != relay_host:
         relay_host = module.params["host"]
         changed = True
     if module.params["domain"] and module.params["domain"] != domain:
@@ -100,18 +103,16 @@ def set_smtp(module, blade):
         encrypt = module.params["encryption"]
         changed = True
     if changed and not module.check_mode:
+        smtp_attrs = {"sender_domain": domain}
+        # Only send a field that was requested or that the array already
+        # holds, so an unset field is not turned into an explicit "".
+        if module.params["host"] is not None or relay_host:
+            smtp_attrs["relay_host"] = relay_host
         if LooseVersion(SMTP_ENCRYPT_API_VERSION) <= LooseVersion(
             get_rest_api_version(blade)
-        ):
-            res = blade.patch_smtp_servers(
-                smtp=SmtpServer(
-                    relay_host=relay_host, sender_domain=domain, encryption_mode=encrypt
-                )
-            )
-        else:
-            res = blade.patch_smtp_servers(
-                smtp=SmtpServer(relay_host=relay_host, sender_domain=domain)
-            )
+        ) and (module.params["encryption"] is not None or encrypt):
+            smtp_attrs["encryption_mode"] = encrypt
+        res = blade.patch_smtp_servers(smtp=SmtpServer(**smtp_attrs))
         if res.status_code != 200:
             module.fail_json(
                 msg="Failed to set SMTP configuration. Error: {0}".format(
